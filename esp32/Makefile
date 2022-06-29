@@ -14,6 +14,8 @@ ifeq ($(wildcard boards/$(BOARD)/.),)
     $(error Invalid BOARD specified)
 endif
 
+PHYSEC_ENABLED ?= 0
+
 IDF_HASH=3394ee5
 
 TARGET ?= boot_app
@@ -135,6 +137,10 @@ CFLAGS_XTENSA_PSRAM = -mfix-esp32-psram-cache-issue
 CFLAGS = $(CFLAGS_XTENSA) $(CFLAGS_XTENSA_PSRAM) $(CFLAGS_XTENSA_OPT) -nostdlib -std=gnu99 -g3 -ggdb -fstrict-volatile-bitfields -Iboards/$(BOARD)
 CFLAGS += $(CFLAGS_MOD) $(CFLAGS_EXTRA)
 CFLAGS_SIGFOX = $(CFLAGS_XTENSA) -O2 -nostdlib -std=gnu99 -g3 -ggdb -fstrict-volatile-bitfields -Iboards/$(BOARD)
+
+ifeq ($(PHYSEC_ENABLED), 1)
+CFLAGS += -DPHYSEC
+endif
 
 # Configure floating point support
 ifeq ($(MICROPY_FLOAT_IMPL),double)

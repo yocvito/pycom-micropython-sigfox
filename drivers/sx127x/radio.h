@@ -20,6 +20,31 @@ Maintainer: Miguel Luis and Gregory Cristian
 #define RADIO_IRQ_FLAG_RX_ERROR                     ( 0x04 )
 
 /*!
+ * PHYSEC interface
+ */
+
+// Device ID length for KEY GENERATION
+#define DEV_ID_LEN      6
+
+/*!
+ * Structure to stores the rssi measurments extracted from transceiver 
+ * during key generation procedure
+ */
+typedef struct _PHYSEC_RssiMsrmts {
+    uint16_t nb_msrmts;
+    int8_t *rssi_msrmts;
+} PHYSEC_RssiMsrmts;
+
+/*!
+ * Structure to synchronize devices during key generation
+ */
+typedef struct _PHYSEC_Sync {
+    uint8_t dev_id[DEV_ID_LEN];
+    uint8_t rmt_dev_id[DEV_ID_LEN];
+    uint32_t cnt;
+} PHYSEC_Sync;
+
+/*!
  * Radio driver supported modems
  */
 typedef enum
@@ -340,6 +365,16 @@ struct Radio_s
      * \brief Manually resets Lora chip.
      */
     void    ( *Reset )( void );
+#ifdef PHYSEC
+    /*!
+     * \brief Get rssi measurements from a specified device id (this is the initiator function)
+     */
+    PHYSEC_RssiMsrmts* (*InitiateRssiMeasure)(PHYSEC_Sync *sync, uint16_t nb_measure);
+    /*!
+     * \brief Get rssi measurements from a specified device id (this is the listenner function)
+     */
+    PHYSEC_RssiMsrmts* (*WaitRssiMeasure)(PHYSEC_Sync *sync, uint16_t nb_measure);
+#endif
 };
 
 /*!

@@ -1098,6 +1098,7 @@ IRAM_ATTR void SX1272OnDio0Irq( void )
                     if( SX1272.Settings.LoRaPacketHandler.SnrValue & 0x80 ) // The SNR sign bit is 1
                     {
                         // Invert and divide by 4
+                        // neg A = ~A + 1
                         snr = ( ( ~SX1272.Settings.LoRaPacketHandler.SnrValue + 1 ) & 0xFF ) >> 2;
                         snr = -snr;
                     }
@@ -1310,3 +1311,79 @@ void SX1272OnDio5Irq( void )
         break;
     }
 }
+
+#ifdef PHYSEC
+/*!
+ * \brief Optimized packet exchange and rssi extracting
+ *
+ * Transceiver is never sent to sleep while performing measurements
+ * to avoid transceiver wake up overload
+ *
+ * \returns structure containing all the rssi measurements, or NULL if allocation failed,
+ *          or (void*) -1 if something went wrong during measure
+ */
+PHYSEC_RssiMsrmts *
+IRAM_ATTR SX1272InitiateRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measures)
+{
+    //int16_t error_margin = 10 + 20; // coherence time tolerance + hardware tolerance (completely random)
+
+    PHYSEC_RssiMsrmts *m = malloc(sizeof(PHYSEC_RssiMsrmts));
+    if (!m)
+        return NULL;
+
+    m->nb_msrmts = nb_measures;
+    m->rssi_msrmts = malloc(sizeof(int8_t) * nb_measures);
+    if (!(m->rssi_msrmts))
+    {
+        free(m);
+        return NULL;
+    }
+
+    for (uint16_t i=0; i<nb_measures; i++)
+    {
+        // schedule packet
+
+        // wait for Sending
+
+        // listen for an answer
+
+        // extract rssi
+
+    }
+
+    return m;
+}
+
+PHYSEC_RssiMsrmts *
+IRAM_ATTR SX1272WaitRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measures /*we could just send an end word for terminating measurment*/)
+{
+    //int16_t error_margin = 10 + 20; // coherence time tolerance + hardware tolerance (completely random)
+
+    PHYSEC_RssiMsrmts *m = malloc(sizeof(PHYSEC_RssiMsrmts));
+    if (!m)
+        return NULL;
+
+    m->nb_msrmts = nb_measures;
+    m->rssi_msrmts = malloc(sizeof(int8_t) * nb_measures);
+    if (!(m->rssi_msrmts))
+    {
+        free(m);
+        return NULL;
+    }
+
+    for (uint16_t i=0; i<nb_measures; i++)
+    {
+        // wait for sync packetw
+
+        // extract rssi
+
+        // send answer packet
+
+        // wait for sending
+
+    }
+
+    return m;
+}
+
+#endif // PHYSEC

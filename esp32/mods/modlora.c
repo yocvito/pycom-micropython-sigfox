@@ -2456,6 +2456,45 @@ STATIC mp_obj_t lora_reset (mp_obj_t self_in) {
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 
+#ifdef PHYSEC
+STATIC mp_obj_t 
+lora_initiate_rssi_measure (mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+{
+    PHYSEC_Sync *sync = (PHYSEC_Sync *) sync_obj;
+    int16_t nb_measure = (int16_t) mp_obj_get_int(nb_measure_obj);
+
+    PHYSEC_RssiMsrmts *rssis = Radio.InitiateRssiMeasure(sync, nb_measure);
+    if (rssis == NULL)
+        return mp_const_none;   // alloc failed
+
+    if (rssis == (void*) -1)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Error: Cannot achieve to performs rssi measurements"));
+
+    free(rssis);
+
+    return mp_const_false;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_initiate_rssi_measure_obj, lora_initiate_rssi_measure);
+
+STATIC mp_obj_t 
+lora_wait_rssi_measure (mp_obj_t self, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+{
+    PHYSEC_Sync *sync = (PHYSEC_Sync *) sync_obj;
+    uint16_t nb_measure = (uint16_t) mp_obj_get_int(nb_measure_obj);
+
+    PHYSEC_RssiMsrmts *rssis = Radio.WaitRssiMeasure(sync, nb_measure);
+    if (rssis == NULL)
+        return mp_const_none;   // alloc failed
+
+    if (rssis == (void*) -1)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Error: Cannot achieve to performs rssi measurements"));
+
+    free(rssis);
+
+    return mp_const_false;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_wait_rssi_measure_obj, lora_wait_rssi_measure);
+#endif
 
 STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     // instance methods
@@ -2485,6 +2524,10 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     { MP_OBJ_NEW_QSTR(MP_QSTR_nvram_erase),           (mp_obj_t)&lora_nvram_erase_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_airtime),               (mp_obj_t)&lora_airtime_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_reset),                 (mp_obj_t)&lora_reset_obj },
+#ifdef PHYSEC
+    { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure), (mp_obj_t)&lora_initiate_rssi_measure_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure),     (mp_obj_t)&lora_wait_rssi_measure_obj },
+#endif
 
 #ifdef LORA_OPENTHREAD_ENABLED
     { MP_OBJ_NEW_QSTR(MP_QSTR_Mesh),                (mp_obj_t)&lora_mesh_type },

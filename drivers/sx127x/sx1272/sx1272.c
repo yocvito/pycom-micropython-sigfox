@@ -1386,4 +1386,36 @@ IRAM_ATTR SX1272WaitRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measu
     return m;
 }
 
+// Reciprocity enhancement
+
+PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts){
+
+    uint16_t coef_nbr = 5;
+    int8_t coef[] = {-3, 12, 17, 12, -3};
+    float normalization;
+
+    PHYSEC_RssiMsrmts rssi_msermts_filterd;
+    rssi_msermts_filterd.nb_msrmts = rssi_msermts.nb_msrmts;
+    rssi_msermts_filterd.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
+
+    for(int i_rssi = 0; i_rssi < rssi_msermts.nb_msrmts; i_rssi++){
+
+        normalization = 0;
+        rssi_msermts_filterd.rssi_msrmts[i_rssi] = 0;
+
+        for(int i_coef = -2; i_coef < 3; i_coef++){
+            if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts.nb_msrmts){
+                rssi_msermts_filterd.rssi_msrmts[i_rssi] += coef[i_coef+2] * rssi_msermts_filterd.rssi_msrmts[i_rssi+i_coef];
+                normalization += coef[i_coef+2];
+            }
+        }
+
+        rssi_msermts_filterd.rssi_msrmts[i_rssi] = (int8_t) ((float)(rssi_msermts_filterd.rssi_msrmts[i_rssi])/normalization);
+
+    }
+
+    return rssi_msermts_filterd;
+
+}
+
 #endif // PHYSEC

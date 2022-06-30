@@ -1390,7 +1390,6 @@ IRAM_ATTR SX1272WaitRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measu
 
 PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts){
 
-    uint16_t coef_nbr = 5;
     int8_t coef[] = {-3, 12, 17, 12, -3};
     float normalization;
 

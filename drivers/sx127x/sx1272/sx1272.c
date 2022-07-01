@@ -1312,7 +1312,7 @@ void SX1272OnDio5Irq( void )
     }
 }
 
-#ifdef PHYSEC
+// #ifdef PHYSEC
 /*!
  * \brief Optimized packet exchange and rssi extracting
  *
@@ -1388,6 +1388,8 @@ IRAM_ATTR SX1272WaitRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measu
 
 // Reciprocity enhancement
 
+// --- Filtering
+
 PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts){
 
     int8_t coef[] = {-3, 12, 17, 12, -3};
@@ -1417,4 +1419,32 @@ PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts){
 
 }
 
-#endif // PHYSEC
+// --- Interpolation
+
+PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
+
+    PHYSEC_RssiMsrmts rssi_msermts_estimation;
+    rssi_msermts_estimation.nb_msrmts = rssi_msermts.nb_msrmts;
+    rssi_msermts_estimation.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
+    rssi_msermts_estimation.rssi_msrmts_delay = 0;
+
+    int8_t delta_rssi;
+    float rssi_err;
+
+    if(rssi_msermts.nb_msrmts > 0 && rssi_msermts.rssi_msrmts_delay > 0){
+
+        rssi_msermts_estimation.rssi_msrmts[0] = rssi_msermts.rssi_msrmts[0];
+
+        for(int i = 1; i < rssi_msermts.nb_msrmts; i++){
+            delta_rssi = rssi_msermts.rssi_msrmts[i] - rssi_msermts.rssi_msrmts[i-1];
+            rssi_err = (float) (rssi_msermts.rssi_msrmts_delay * delta_rssi) / (float) (100);
+            rssi_msermts_estimation.rssi_msrmts[i] = rssi_msermts.rssi_msrmts[i] - rssi_err;
+        }
+
+    }
+
+    return rssi_msermts_estimation;
+
+}
+
+// #endif // PHYSEC

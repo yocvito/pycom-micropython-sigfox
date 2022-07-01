@@ -2495,11 +2495,44 @@ lora_wait_rssi_measure (mp_obj_t self, mp_obj_t sync_obj, mp_obj_t nb_measure_ob
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_wait_rssi_measure_obj, lora_wait_rssi_measure);
 
-STATIC void
+STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
 
+    int8_t rssi_tmp[] = {48, 76, 98, 84, 56, 64, 72, 82, 98, 102};
+
+    PHYSEC_RssiMsrmts M;
+    M.nb_msrmts = 10;
+    M.rssi_msrmts = rssi_tmp;
+    M.rssi_msrmts_delay = 12;
+
+    printf("rssi original :");
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
+        
+    }
+    printf("\n");
+
+    PHYSEC_RssiMsrmts M_filtered = PHYSEC_golay_filter(M);
+    printf("rssi filtered :");
+    for(int i = 0; i < M_filtered.nb_msrmts; i++){
+        printf(" %d", M_filtered.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    PHYSEC_RssiMsrmts M_estimated = PHYSEC_interpolation(M_filtered);
+    printf("rssi estimated :");
+    for(int i = 0; i < M_estimated.nb_msrmts; i++){
+        printf(" %d", M_estimated.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    free(M_estimated.rssi_msrmts);
+    free(M_filtered.rssi_msrmts);
+
     printf("---------- < PHYSEC sandbox < -----------\n");
+
+    return mp_obj_new_int(0);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_physec_sandbox_obj, lora_physec_sandbox);
 #endif

@@ -1312,7 +1312,7 @@ void SX1272OnDio5Irq( void )
     }
 }
 
-// #ifdef PHYSEC
+#ifdef PHYSEC
 /*!
  * \brief Optimized packet exchange and rssi extracting
  *
@@ -1447,4 +1447,4 @@ PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
 
 }
 
-// #endif // PHYSEC
+#endif // PHYSEC

@@ -2494,6 +2494,14 @@ lora_wait_rssi_measure (mp_obj_t self, mp_obj_t sync_obj, mp_obj_t nb_measure_ob
     return mp_const_false;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_wait_rssi_measure_obj, lora_wait_rssi_measure);
+
+STATIC void
+lora_physec_sandbox(mp_obj_t self){
+    printf("---------- > PHYSEC sandbox > -----------\n");
+
+    printf("---------- < PHYSEC sandbox < -----------\n");
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_physec_sandbox_obj, lora_physec_sandbox);
 #endif
 
 STATIC const mp_map_elem_t lora_locals_dict_table[] = {
@@ -2527,6 +2535,7 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
 #ifdef PHYSEC
     { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure), (mp_obj_t)&lora_initiate_rssi_measure_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure),     (mp_obj_t)&lora_wait_rssi_measure_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_physec_sandbox),     (mp_obj_t)&lora_physec_sandbox_obj },
 #endif
 
 #ifdef LORA_OPENTHREAD_ENABLED

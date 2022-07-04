@@ -1313,7 +1313,7 @@ void SX1272OnDio5Irq( void )
     }
 }
 
-#define PHYSEC
+
 #ifdef PHYSEC
 
 
@@ -1572,5 +1572,67 @@ PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
     return rssi_msermts_estimation;
 
 }
+
+// Key generation
+
+/*
+    128 bits = 16 bytes = a 16-chat-table.
+    For now, if this value is changed, the code will not going to adapt.
+*/
+#define PHYSEC_KEY_LEN 128 // bits.
+
+
+// -- Quntification
+
+#define PHYSEC_QUNTIFICATION_WINDOW_LEN 10
+
+void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_window_size){
+    
+    if(rssi_window_size <= 1){
+        return;
+    }
+
+    int8_t *tab1 = rssi_window;
+    int8_t tab1_size = (int8_t) (((float)(rssi_window_size))/2.0);
+    int8_t *tab2 = rssi_window+tab1_size;
+    int8_t tab2_size = rssi_window - tab1_size;
+
+    int8_t tmp_tab[rssi_window_size];
+
+    PHYSEC_quntification_sort_rssi_window(rssi_window, half_size);
+    PHYSEC_quntification_sort_rssi_window(rssi_window+half_size, rssi_window_size-half_size);
+
+    int i1=0, i2=0, i=0;
+    while(i1 < tab1_size){
+        while(i2 < tab2_size){
+            if(tab1[i1]<tab2[i2]){
+               tmp_tab[i++] =  tab1[i1++];
+            }else{
+                tmp_tab[i++] =  tab2[i2++];
+            }
+        }
+    }
+
+    memcpy(rssi_window, tmp_tab);
+}
+
+void PHYSEC_quntification_compute_bin(int8_t *rssi_window, int8_t *bin_len, int8_t *q_0, int8_t *q_m){
+
+    PHYSEC_quntification_sort_rssi_window(rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN);
+    
+    int8_t bin_tmp;
+
+    *bin_len = abs(rssi_window[1] - rssi_window[0])
+    for(int i = 2 ; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+        bin_tmp = abs(rssi_window[i] - rssi_window[i-1]);
+        if(bin_tmp < *bin_len){
+            *bin_len = bin_tmp;
+        }
+    }
+
+    *q_0 = rssi_window[0];
+    *q_m = rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN-1];
+}
+
 
 #endif // PHYSEC

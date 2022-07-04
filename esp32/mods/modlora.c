@@ -61,6 +61,8 @@
 #include "modmesh.h"
 #endif  // #ifdef LORA_OPENTHREAD_ENABLED
 
+#include "str_utils.h"
+
 #include "random.h"
 /******************************************************************************
  DEFINE PRIVATE CONSTANTS
@@ -115,6 +117,10 @@
 #define MODLORA_NVS_NAMESPACE                       "LORA_NVM"
 
 #define MESH_CLI_OUTPUT_SIZE                            (1024)
+
+
+// PHYSEC
+#define PHYSEC_DEBUG    1
 
 /******************************************************************************
  DEFINE PRIVATE TYPES
@@ -2457,43 +2463,345 @@ STATIC mp_obj_t lora_reset (mp_obj_t self_in) {
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 
 #ifdef PHYSEC
-STATIC mp_obj_t 
-lora_initiate_rssi_measure (mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+/*!
+ * \brief Initiate an Rssi measurement procedure with another device using the same sync identifiers
+ *
+ *        This function switch automatically of frequency to 867900000, always returns 0 as delay in 
+ *        the struct PHYSEC_RssiMsrmts, and if it fails to calculate a value because of timeout, then
+ *        the corresponding value in the rssi_msrmts field is set to 0.
+ * 
+ * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller), 
+ *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we 
+ *          could just reinitiate the measure, but for now it is safer)
+ */
+static PHYSEC_RssiMsrmts *
+initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
 {
-    PHYSEC_Sync *sync = (PHYSEC_Sync *) sync_obj;
-    int16_t nb_measure = (int16_t) mp_obj_get_int(nb_measure_obj);
+    PHYSEC_RssiMsrmts *m = calloc(1, sizeof(PHYSEC_RssiMsrmts));
+    if (!m)
+        return m;
 
-    PHYSEC_RssiMsrmts *rssis = Radio.InitiateRssiMeasure(sync, nb_measure);
-    if (rssis == NULL)
-        return mp_const_none;   // alloc failed
+    m->nb_msrmts = nb_measure;
+    m->rssi_msrmts = calloc(nb_measure, sizeof(int8_t));
+    if (!m->rssi_msrmts)
+    {
+        free(m);
+        return NULL;
+    }
 
-    if (rssis == (void*) -1)
-        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Error: Cannot achieve to performs rssi measurements"));
+    // change to PHYSEC KeyGen frequency
+    lora_cmd_data_t cmd_data;
+    uint32_t freq = lora->frequency;
+    lora_get_config (&cmd_data);
+    cmd_data.info.init.frequency = 867900000;
+    cmd_data.cmd = E_LORA_CMD_INIT;
+    lora_send_cmd (&cmd_data);
 
-    free(rssis);
+    sync->cnt = 0;
+    for (uint16_t i=0; i<nb_measure; i++)
+    {
+        uint8_t buf[PHYSEC_DEV_ID_LEN + 1] = { 0 };
+        memcpy(buf, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+        buf[PHYSEC_DEV_ID_LEN] = sync->cnt;
 
-    return mp_const_false;
+        if ( lora_send(buf, sizeof(buf), -1) != sizeof(buf) )
+            return (void*) -1;
+
+        uint32_t start = mp_hal_ticks_ms(); 
+        uint8_t received = 0;
+        do 
+        {
+            memset(buf, 0, PHYSEC_DEV_ID_LEN);
+            int32_t port = 1;
+            int32_t size = lora_recv(buf, sizeof(buf), PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start), NULL);
+            if (size == sizeof(buf))
+            {
+#if PHYSEC_DEBUG
+                printf("Pkt received ! Check if its the probe req we waiting for\n");
+                hexdump(buf, sizeof(buf));
+#endif
+                // check if its our probe response
+                if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && *(uint8_t*) (buf+PHYSEC_DEV_ID_LEN) == (sync->cnt+1))
+                {
+                    m->rssi_msrmts[i] = lora->rssi; // contains the rssi of the last received lora pkt
+                    received = 1;
+                }
+            }
+        } while( !received && mp_hal_ticks_ms()-start < PHYSEC_PROBE_TIMEOUT );
+
+        // the rssi array is already set to 0 due to calloc, this code is useless and only here for verbosity (dont uncomment)
+        //if (!received)
+        //    m->rssi_msrmts[i] = 0;      // indicate no measure done
+
+        sync->cnt += 2;
+    }
+    m->delay = 0;
+
+    cmd_data.info.init.frequency = freq;
+    lora_send_cmd (&cmd_data);
+
+    return m;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_initiate_rssi_measure_obj, lora_initiate_rssi_measure);
+
+/*!
+ * \brief Wait for an Rssi measurement procedure with another device using the same sync identifiers
+ *
+ *        This function switch automatically of frequency to 867900000, and if it fails to calculate
+ *        a value because of timeout, then the corresponding value in the rssi_msrmts field is set to 0.
+ * 
+ * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller), 
+ *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we 
+ *          could just reinitiate the measure, but for now it is safer)
+ */
+static PHYSEC_RssiMsrmts *
+wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
+{
+    PHYSEC_RssiMsrmts *m = calloc(1, sizeof(PHYSEC_RssiMsrmts));
+    if (!m)
+        return m;
+
+    m->nb_msrmts = nb_measure;
+    m->rssi_msrmts = calloc(nb_measure, sizeof(int8_t));
+    if (!m->rssi_msrmts)
+    {
+        free(m);
+        return NULL;
+    }
+
+    // change to PHYSEC KeyGen frequency
+    lora_cmd_data_t cmd_data;
+    uint32_t freq = lora->frequency;
+    lora_get_config (&cmd_data);
+    cmd_data.info.init.frequency = 867900000;
+    cmd_data.cmd = E_LORA_CMD_INIT;
+    lora_send_cmd (&cmd_data);
+    
+    uint32_t sum_delay = 0;
+    uint32_t start = 0;
+    sync->cnt = 0;
+    for (uint16_t i=0; i<nb_measure; i++)
+    {
+        uint8_t buf[PHYSEC_DEV_ID_LEN + 1] = { 0 };
+        uint32_t now = 0;
+        uint8_t received = 0;
+        do 
+        {
+            memset(buf, 0, sizeof(buf));
+            int32_t size = lora_recv(buf, sizeof(buf), PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start), NULL);
+            if (size == sizeof(buf))
+            {
+#if PHYSEC_DEBUG
+                printf("Pkt received ! Check if its the probe req we waiting for\n");
+                hexdump(buf, sizeof(buf));
+#endif
+                // check if its our probe response
+                if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && buf[PHYSEC_DEV_ID_LEN] == sync->cnt)
+                {
+
+                    m->rssi_msrmts[i] = lora->rssi;
+                    received = 1;
+                }
+            }
+            now = mp_hal_ticks_ms()-start;
+        } while( !received && (i == 0 || now < PHYSEC_PROBE_TIMEOUT) );
+        if (i != 0)     // doesn't take care about the first waiting time which is not scaled on PHYSEC_PROBE_TIMEOUT
+            sum_delay += now;
+
+        sync->cnt++ ;
+        memcpy(buf, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+        buf[PHYSEC_DEV_ID_LEN] = sync->cnt;
+
+        uint16_t timeout = PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start);
+        if (timeout > 0)
+        {
+            if ( lora_send(buf, sizeof(buf), timeout ) != sizeof(buf) )
+                return (void*) -1;
+        }
+
+        sync->cnt++;
+        start = mp_hal_ticks_ms(); 
+    }
+
+    m->delay = (((float)(sum_delay / nb_measure) / 2) / PHYSEC_PROBE_TIMEOUT) * 100;
+
+    cmd_data.info.init.frequency = freq;
+    lora_send_cmd (&cmd_data);
+
+    return m;
+}
 
 STATIC mp_obj_t 
-lora_wait_rssi_measure (mp_obj_t self, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+lora_initiate_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
 {
-    PHYSEC_Sync *sync = (PHYSEC_Sync *) sync_obj;
+    lora_obj_t *lora_obj = (lora_obj_t*) self_in;
+    size_t len = 0;
+    mp_obj_t *tuple, *ids;
+    mp_obj_tuple_get(sync_obj, &len, &tuple);
+    if (len != 2)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "sync_obj should be a byte tuple of length 2"));
+
+    if (mp_obj_get_int(mp_obj_len(tuple[0])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "dev_id in sync_obj should be a 6 bytes array"));
+    if (mp_obj_get_int(mp_obj_len(tuple[1])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "rmt_dev_id in sync_obj should be a 6 bytes array"));
+
+    PHYSEC_Sync sync = { 0 };
+    memcpy(&(sync.dev_id), mp_obj_str_get_str(tuple[0]), PHYSEC_DEV_ID_LEN);
+    memcpy(&(sync.rmt_dev_id), mp_obj_str_get_str(tuple[1]), PHYSEC_DEV_ID_LEN);
+
     uint16_t nb_measure = (uint16_t) mp_obj_get_int(nb_measure_obj);
 
-    PHYSEC_RssiMsrmts *rssis = Radio.WaitRssiMeasure(sync, nb_measure);
+    // mesure an returns data
+    PHYSEC_RssiMsrmts *rssis = Radio.InitiateRssiMeasure(&sync, nb_measure);
     if (rssis == NULL)
         return mp_const_none;   // alloc failed
 
     if (rssis == (void*) -1)
-        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Error: Cannot achieve to performs rssi measurements"));
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Cannot achieve to performs rssi measurements"));
+
+    mp_obj_t rssis_obj[rssis->nb_msrmts];
+    for (uint16_t i=0; i<rssis->nb_msrmts; i++)
+        rssis_obj[i] = mp_obj_new_int(rssis->rssi_msrmts[i]);
+
+    mp_obj_t ret[2];
+    ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
+    ret[1] = mp_obj_new_float(rssis->delay);        // delay
 
     free(rssis);
 
-    return mp_const_false;
+    return mp_obj_new_tuple(2, ret);
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_wait_rssi_measure_obj, lora_wait_rssi_measure);
+STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_initiate_rssi_measure_driver_obj, lora_initiate_rssi_measure_driver);
+
+STATIC mp_obj_t 
+lora_wait_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+{
+        lora_obj_t *lora_obj = (lora_obj_t*) self_in;
+    size_t len = 0;
+    mp_obj_t *tuple, *ids;
+    mp_obj_tuple_get(sync_obj, &len, &tuple);
+    if (len != 2)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "sync_obj should be a byte tuple of length 2"));
+
+    if (mp_obj_get_int(mp_obj_len(tuple[0])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "dev_id in sync_obj should be a 6 bytes array"));
+    if (mp_obj_get_int(mp_obj_len(tuple[1])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "rmt_dev_id in sync_obj should be a 6 bytes array"));
+
+    PHYSEC_Sync sync = { 0 };
+    memcpy(&(sync.dev_id), mp_obj_str_get_str(tuple[0]), PHYSEC_DEV_ID_LEN);
+    memcpy(&(sync.rmt_dev_id), mp_obj_str_get_str(tuple[1]), PHYSEC_DEV_ID_LEN);
+
+    int16_t nb_measure = (int16_t) mp_obj_get_int(nb_measure_obj);
+
+    PHYSEC_RssiMsrmts *rssis = Radio.WaitRssiMeasure(&sync, nb_measure);
+
+    if (rssis == NULL)
+        return mp_const_none;   // alloc failed
+
+    if (rssis == (void*) -1)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Cannot achieve to performs rssi measurements"));
+
+    mp_obj_t rssis_obj[rssis->nb_msrmts];
+    for (uint16_t i=0; i<rssis->nb_msrmts; i++)
+        rssis_obj[i] = mp_obj_new_int(rssis->rssi_msrmts[i]);
+
+    mp_obj_t ret[2];
+    ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
+    ret[1] = mp_obj_new_float(rssis->delay);        // delay
+
+    free(rssis);
+
+    return mp_obj_new_tuple(2, ret);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_wait_rssi_measure_driver_obj, lora_wait_rssi_measure_driver);
+
+STATIC mp_obj_t 
+lora_initiate_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+{
+    // retrieve params from python args 
+    lora_obj_t *lora_obj = (lora_obj_t*) self_in;
+    size_t len = 0;
+    mp_obj_t *tuple, *ids;
+    mp_obj_tuple_get(sync_obj, &len, &tuple);
+    if (len != 2)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "sync_obj should be a byte tuple of length 2"));
+
+    if (mp_obj_get_int(mp_obj_len(tuple[0])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "dev_id in sync_obj should be a 6 bytes array"));
+    if (mp_obj_get_int(mp_obj_len(tuple[1])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "rmt_dev_id in sync_obj should be a 6 bytes array"));
+
+    PHYSEC_Sync sync = { 0 };
+    memcpy(&(sync.dev_id), mp_obj_str_get_str(tuple[0]), PHYSEC_DEV_ID_LEN);
+    memcpy(&(sync.rmt_dev_id), mp_obj_str_get_str(tuple[1]), PHYSEC_DEV_ID_LEN);
+
+    uint16_t nb_measure = (uint16_t) mp_obj_get_int(nb_measure_obj);
+
+    // mesure an returns data
+    PHYSEC_RssiMsrmts *rssis = initiate_rssi_measure(lora_obj, &sync, nb_measure);
+    if (rssis == NULL)
+        return mp_const_none;   // alloc failed
+
+    if (rssis == (void*) -1)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Cannot achieve to performs rssi measurements"));
+
+    mp_obj_t rssis_obj[rssis->nb_msrmts];
+    for (uint16_t i=0; i<rssis->nb_msrmts; i++)
+        rssis_obj[i] = mp_obj_new_int(rssis->rssi_msrmts[i]);
+
+    mp_obj_t ret[2];
+    ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
+    ret[1] = mp_obj_new_float(rssis->delay);        // delay
+
+    free(rssis);
+
+    return mp_obj_new_tuple(2, ret);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_initiate_rssi_measure_obj, lora_initiate_rssi_measure);
+
+STATIC mp_obj_t 
+lora_wait_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+{
+    lora_obj_t *lora_obj = (lora_obj_t*) self_in;
+    size_t len = 0;
+    mp_obj_t *tuple, *ids;
+    mp_obj_tuple_get(sync_obj, &len, &tuple);
+    if (len != 2)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "sync_obj should be a byte tuple of length 2"));
+
+    if (mp_obj_get_int(mp_obj_len(tuple[0])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "dev_id in sync_obj should be a 6 bytes array"));
+    if (mp_obj_get_int(mp_obj_len(tuple[1])) != PHYSEC_DEV_ID_LEN)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "rmt_dev_id in sync_obj should be a 6 bytes array"));
+
+    PHYSEC_Sync sync = { 0 };
+    memcpy(&(sync.dev_id), mp_obj_str_get_str(tuple[0]), PHYSEC_DEV_ID_LEN);
+    memcpy(&(sync.rmt_dev_id), mp_obj_str_get_str(tuple[1]), PHYSEC_DEV_ID_LEN);
+
+    int16_t nb_measure = (int16_t) mp_obj_get_int(nb_measure_obj);
+
+    PHYSEC_RssiMsrmts *rssis = wait_rssi_measure(lora_obj, &sync, nb_measure);
+
+    if (rssis == NULL)
+        return mp_const_none;   // alloc failed
+
+    if (rssis == (void*) -1)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Cannot achieve to performs rssi measurements"));
+
+    mp_obj_t rssis_obj[rssis->nb_msrmts];
+    for (uint16_t i=0; i<rssis->nb_msrmts; i++)
+        rssis_obj[i] = mp_obj_new_int(rssis->rssi_msrmts[i]);
+
+    mp_obj_t ret[2];
+    ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
+    ret[1] = mp_obj_new_float(rssis->delay);        // delay
+
+    free(rssis);
+
+    return mp_obj_new_tuple(2, ret);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_wait_rssi_measure_obj, lora_wait_rssi_measure);
 #endif
 
 STATIC const mp_map_elem_t lora_locals_dict_table[] = {
@@ -2525,6 +2833,8 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     { MP_OBJ_NEW_QSTR(MP_QSTR_airtime),               (mp_obj_t)&lora_airtime_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_reset),                 (mp_obj_t)&lora_reset_obj },
 #ifdef PHYSEC
+    { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure_ll), (mp_obj_t)&lora_initiate_rssi_measure_driver_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure_ll),     (mp_obj_t)&lora_wait_rssi_measure_driver_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure), (mp_obj_t)&lora_initiate_rssi_measure_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure),     (mp_obj_t)&lora_wait_rssi_measure_obj },
 #endif

@@ -24,7 +24,10 @@ Maintainer: Miguel Luis and Gregory Cristian
  */
 
 // Device ID length for KEY GENERATION
-#define DEV_ID_LEN      6
+#define PHYSEC_DEV_ID_LEN          6
+#define PHYSEC_KEYGEN_FREQUENCY    867900000
+#define PHYSEC_PROBE_TIMEOUT       500         // 500 ms
+#define PHYSEC_SYNC_WORD    0x67
 
 /*!
  * Structure to stores the rssi measurments extracted from transceiver 
@@ -33,15 +36,16 @@ Maintainer: Miguel Luis and Gregory Cristian
 typedef struct _PHYSEC_RssiMsrmts {
     uint16_t nb_msrmts;
     int8_t *rssi_msrmts;
+    float delay;
 } PHYSEC_RssiMsrmts;
 
 /*!
  * Structure to synchronize devices during key generation
  */
 typedef struct _PHYSEC_Sync {
-    uint8_t dev_id[DEV_ID_LEN];
-    uint8_t rmt_dev_id[DEV_ID_LEN];
-    uint32_t cnt;
+    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
+    uint8_t rmt_dev_id[PHYSEC_DEV_ID_LEN];
+    uint8_t cnt;
 } PHYSEC_Sync;
 
 /*!
@@ -369,11 +373,11 @@ struct Radio_s
     /*!
      * \brief Get rssi measurements from a specified device id (this is the initiator function)
      */
-    PHYSEC_RssiMsrmts* (*InitiateRssiMeasure)(PHYSEC_Sync *sync, uint16_t nb_measure);
+    PHYSEC_RssiMsrmts* (*InitiateRssiMeasure)(PHYSEC_Sync *sync, const uint16_t nb_measure);
     /*!
      * \brief Get rssi measurements from a specified device id (this is the listenner function)
      */
-    PHYSEC_RssiMsrmts* (*WaitRssiMeasure)(PHYSEC_Sync *sync, uint16_t nb_measure);
+    PHYSEC_RssiMsrmts* (*WaitRssiMeasure)(PHYSEC_Sync *sync, const uint16_t nb_measure);
 #endif
 };
 

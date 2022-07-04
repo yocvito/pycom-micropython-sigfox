@@ -414,8 +414,8 @@ void SX1272SetPublicNetwork( bool enable );
  */
 void SX1272Reset( void );
 
-PHYSEC_RssiMsrmts *SX1272InitiateRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measures);
+PHYSEC_RssiMsrmts *SX1272InitiateRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures);
 
-PHYSEC_RssiMsrmts *SX1272WaitRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measures);
+PHYSEC_RssiMsrmts *SX1272WaitRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures);
 
 #endif // __SX1272_H__

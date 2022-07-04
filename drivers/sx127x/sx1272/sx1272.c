@@ -34,6 +34,7 @@ Maintainer: Miguel Luis and Gregory Cristian
 #include "sx1272-board.h"
 #include "esp_attr.h"
 #include "esp32_mphal.h"
+#include <time.h>
 
 /*
  * Local types definition
@@ -1313,6 +1314,8 @@ void SX1272OnDio5Irq( void )
 }
 
 #ifdef PHYSEC
+
+
 /*!
  * \brief Optimized packet exchange and rssi extracting
  *
@@ -1323,9 +1326,48 @@ void SX1272OnDio5Irq( void )
  *          or (void*) -1 if something went wrong during measure
  */
 PHYSEC_RssiMsrmts *
-IRAM_ATTR SX1272InitiateRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measures)
+IRAM_ATTR SX1272InitiateRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures)
 {
+/*
     //int16_t error_margin = 10 + 20; // coherence time tolerance + hardware tolerance (completely random)
+
+#ifndef PHYSEC_OPTIMIZED
+    // check if LoRa mode
+    uint8_t mode = SX1272Read(REG_LR_OPMODE);
+    // if highest bit (7th) of RegOpMode is 1 then we are running lora mode on transceiver, otherwise its FSK
+    if ( !(mode & 0x80) ) {
+        printf("Not in LoRa mode. Cannot performs RSSI measurements\n");
+        return (void*) -1;
+    }
+
+    printf("mode = %d\n", mode & 0x07);
+
+    // activate RX & TX IRQ masks
+    uint8_t masks = SX1272Read(REG_LR_IRQFLAGSMASK);
+            printf("IRQ masks = %u %u %u %u %u %u %u %u\n",
+            (unsigned int)(masks >> 7) & 0x1,
+            (unsigned int)(masks >> 6) & 0x1,
+            (unsigned int)(masks >> 5) & 0x1,
+            (unsigned int)(masks >> 4) & 0x1,
+            (unsigned int)(masks >> 3) & 0x1,
+            (unsigned int)(masks >> 2) & 0x1,
+            (unsigned int)(masks >> 1) & 0x1,
+            (unsigned int)(masks) & 0x1
+            );
+    SX1272Write(REG_LR_IRQFLAGSMASK, (masks & (~(0x08|0x40))));
+     masks = SX1272Read(REG_LR_IRQFLAGSMASK);
+            printf("IRQ masks = %u %u %u %u %u %u %u %u\n",
+            (unsigned int)(masks >> 7) & 0x1,
+            (unsigned int)(masks >> 6) & 0x1,
+            (unsigned int)(masks >> 5) & 0x1,
+            (unsigned int)(masks >> 4) & 0x1,
+            (unsigned int)(masks >> 3) & 0x1,
+            (unsigned int)(masks >> 2) & 0x1,
+            (unsigned int)(masks >> 1) & 0x1,
+            (unsigned int)(masks) & 0x1
+            );
+#endif
+*/
 
     PHYSEC_RssiMsrmts *m = malloc(sizeof(PHYSEC_RssiMsrmts));
     if (!m)
@@ -1338,25 +1380,106 @@ IRAM_ATTR SX1272InitiateRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_m
         free(m);
         return NULL;
     }
+/*
+    SX1272SetChannel(PHYSEC_KEYGEN_FREQUENCY);
+    printf("Starting KeyGen on freq %d\n", SX1272GetChannel());
 
+    uint8_t buf[PHYSEC_DEV_ID_LEN+1];
     for (uint16_t i=0; i<nb_measures; i++)
     {
+        printf("Craft and send Probe Request\n");
+        uint8_t irq_flags = 0;
+        // prepare packet
+        memcpy(buf, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+        *(int8_t*) (buf + PHYSEC_DEV_ID_LEN) = sync->cnt;
+
+        SX1272SetOpMode( RFLR_OPMODE_TRANSMITTER );
         // schedule packet
+        SX1272Send(buf, sizeof(buf));
 
-        // wait for Sending
+        printf("Probe sent ! Waiting for response...\n");
 
-        // listen for an answer
+        SX1272SetOpMode( RFLR_OPMODE_RECEIVER );
+        SX1272SetRx(PHYSEC_PROBE_TIMEOUT);
+        uint8_t on_rx_wait = 1;
+        int8_t rssi = 0;
+        uint32_t start = time(NULL);
+        // wait for our probe response (timeout after 1 packet received)
+        while ( on_rx_wait && PHYSEC_PROBE_TIMEOUT > time(NULL)-start )
+        {
+            while ( (irq_flags = SX1272Read(REG_LR_IRQFLAGS)) & 0x10 );
+                usleep(5000);
 
-        // extract rssi
+            printf("Header received ! Retrieving rssi...\n");
+            rssi = SX1272Read( REG_LR_RSSIVALUE );
 
+            while ( !(( irq_flags = SX1272Read(REG_LR_IRQFLAGS)) & 0x40) )
+                usleep(5000);  // 0.005 seconds
+
+            SX1272Write(REG_LR_IRQFLAGS, irq_flags & (~0x40) );
+            printf("Packet received. Is Probe Response ?"); 
+
+            // check if packet match
+            uint8_t pkt_addr = SX1272Read(REG_LR_FIFORXCURRENTADDR);
+            uint8_t pkt_size = SX1272Read(REG_LR_RXNBBYTES);
+            uint8_t pkt[pkt_size];
+            
+            memset(pkt, 0, sizeof(pkt));
+            SX1272ReadBuffer(pkt_addr, pkt, pkt_size);
+
+            if (memcmp(pkt, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && pkt[PHYSEC_DEV_ID_LEN] == (sync->cnt+1))
+            {
+                printf("yes\n");
+                on_rx_wait = 0;
+            }
+            else 
+                printf("no\n");
+
+        }
+
+
+
+
+        uint8_t snr = SX1272Read( REG_LR_PKTSNRVALUE );
+        if( snr & 0x80 ) // The SNR sign bit is 1
+        {
+            snr = ( ( ~snr + 1 ) & 0xFF ) >> 2;
+            snr = -snr;
+        }
+        else
+        {
+            // Divide by 4
+            snr = ( snr & 0xFF ) >> 2;
+        }
+        if( snr < 0 )
+        {
+            m->rssi_msrmts[i] = RSSI_OFFSET + rssi + ( rssi >> 4 ) +
+                                                            snr;
+        }
+        else
+        {
+            m->rssi_msrmts[i] = RSSI_OFFSET + rssi + ( rssi >> 4 );
+        }
+        printf("Rssi measured from Probe Response : %d\n", m-> rssi_msrmts[i]);
+
+        sync->cnt++;
     }
-
+*/
     return m;
 }
-
 PHYSEC_RssiMsrmts *
-IRAM_ATTR SX1272WaitRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measures /*we could just send an end word for terminating measurment*/)
+IRAM_ATTR SX1272WaitRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures )
 {
+#ifndef PHYSEC_OPTIMIZED
+    // check if LoRa mode
+    uint8_t mode = SX1272Read(REG_LR_OPMODE);
+    // if highest bit (7th) of RegOpMode is 1 then we are running lora mode on transceiver, otherwise its FSK
+    if ( (mode & 0x80) ^ 0x1 ) {
+        printf("Not in LoRa mode. Cannot performs RSSI measurements\n");
+        return (void*) -1;
+    }
+#endif
+
     //int16_t error_margin = 10 + 20; // coherence time tolerance + hardware tolerance (completely random)
 
     PHYSEC_RssiMsrmts *m = malloc(sizeof(PHYSEC_RssiMsrmts));
@@ -1373,7 +1496,7 @@ IRAM_ATTR SX1272WaitRssiMeasure(const PHYSEC_Sync *sync, const uint16_t nb_measu
 
     for (uint16_t i=0; i<nb_measures; i++)
     {
-        // wait for sync packetw
+        // wait for sync packet
 
         // extract rssi
 

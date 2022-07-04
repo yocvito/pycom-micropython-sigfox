@@ -2622,7 +2622,7 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
         start = mp_hal_ticks_ms();
     }
 
-    m->rssi_msrmts_delay = (((float)(sum_delay / nb_measure) / 2) / PHYSEC_PROBE_TIMEOUT) * 100;
+    m->rssi_msrmts_delay = (((float)(sum_delay / nb_measure) / 2) / PHYSEC_PROBE_TIMEOUT);
 
     cmd_data.info.init.frequency = freq;
     lora_send_cmd (&cmd_data);

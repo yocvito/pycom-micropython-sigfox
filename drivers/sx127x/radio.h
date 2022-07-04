@@ -33,7 +33,7 @@ Maintainer: Miguel Luis and Gregory Cristian
  * Structure to stores the rssi measurments extracted from transceiver
  * during key generation procedure
  * rssi_msrmts_delay :
- *  between 0 and 100
+ *  a float between 0 and 1
  *  = 0 in case of initiating measurments
  */
 typedef struct _PHYSEC_RssiMsrmts {

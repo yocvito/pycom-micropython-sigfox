@@ -1313,7 +1313,7 @@ void SX1272OnDio5Irq( void )
     }
 }
 
-
+#define PHYSEC
 #ifdef PHYSEC
 
 
@@ -1563,7 +1563,7 @@ PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
 
         for(int i = 1; i < rssi_msermts.nb_msrmts; i++){
             delta_rssi = rssi_msermts.rssi_msrmts[i] - rssi_msermts.rssi_msrmts[i-1];
-            rssi_err = (float) (rssi_msermts.rssi_msrmts_delay * delta_rssi) / (float) (100);
+            rssi_err = (rssi_msermts.rssi_msrmts_delay * (float)(delta_rssi));
             rssi_msermts_estimation.rssi_msrmts[i] = rssi_msermts.rssi_msrmts[i] - rssi_err;
         }
 

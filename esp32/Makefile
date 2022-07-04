@@ -139,7 +139,8 @@ CFLAGS += $(CFLAGS_MOD) $(CFLAGS_EXTRA)
 CFLAGS_SIGFOX = $(CFLAGS_XTENSA) -O2 -nostdlib -std=gnu99 -g3 -ggdb -fstrict-volatile-bitfields -Iboards/$(BOARD)
 
 ifeq ($(PHYSEC_ENABLED), 1)
-CFLAGS += -DPHYSEC
+    $(info PHYSEC Module Enabled)
+    CFLAGS += -DPHYSEC
 endif
 
 # Configure floating point support

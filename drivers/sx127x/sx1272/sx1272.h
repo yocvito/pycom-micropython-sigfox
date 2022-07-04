@@ -418,4 +418,8 @@ PHYSEC_RssiMsrmts *SX1272InitiateRssiMeasure(PHYSEC_Sync *sync, const uint16_t n
 
 PHYSEC_RssiMsrmts *SX1272WaitRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures);
 
+PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts);
+
+PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts);
+
 #endif // __SX1272_H__

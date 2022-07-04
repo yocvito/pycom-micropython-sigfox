@@ -1109,7 +1109,7 @@ static void TASK_LoRa (void *pvParameters) {
                     mibReq.Type = MIB_NETWORK_ACTIVATION;
                     mibReq.Param.NetworkActivation = ACTIVATION_TYPE_OTAA;
                     LoRaMacMibSetRequestConfirm( &mibReq );
-                    
+
                     TimerStart( &TxNextActReqTimer );
                     mlmeReq.Type = MLME_JOIN;
                     mlmeReq.Req.Join.DevEui = (uint8_t *)lora_obj.u.otaa.DevEui;
@@ -1122,7 +1122,7 @@ static void TASK_LoRa (void *pvParameters) {
                     mibReq.Type = MIB_NETWORK_ACTIVATION;
                     mibReq.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
                     LoRaMacMibSetRequestConfirm( &mibReq );
-                    
+
                     mibReq.Type = MIB_NET_ID;
                     mibReq.Param.NetID = lora_obj.net_id;
                     LoRaMacMibSetRequestConfirm( &mibReq );
@@ -1996,26 +1996,26 @@ STATIC mp_obj_t lora_join_multicast_group (mp_uint_t n_args, const mp_obj_t *pos
         { MP_QSTR_mcNwkKey,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
         { MP_QSTR_mcAppKey,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
     };
-    
+
     // parse args
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(args), allowed_args, args);
-    
+
     mp_buffer_info_t bufinfo_0, bufinfo_1;
     mp_get_buffer_raise(args[1].u_obj, &bufinfo_0, MP_BUFFER_READ);
     mp_get_buffer_raise(args[2].u_obj, &bufinfo_1, MP_BUFFER_READ);
-    
+
     MulticastParams_t *channelParam = m_new_obj(MulticastParams_t);
     channelParam->Next = NULL;
     channelParam->DownLinkCounter = 0;
     channelParam->Address = args[0].u_int;
     memcpy(channelParam->NwkSKey, bufinfo_0.buf, sizeof(channelParam->NwkSKey));
     memcpy(channelParam->AppSKey, bufinfo_1.buf, sizeof(channelParam->AppSKey));
-    
+
     if (LoRaMacMulticastChannelLink(channelParam) == LORAMAC_STATUS_OK) {
         return mp_const_true;
     }
-            
+
     return mp_const_false;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_KW(lora_join_multicast_group_obj, 0, lora_join_multicast_group);
@@ -2466,12 +2466,12 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 /*!
  * \brief Initiate an Rssi measurement procedure with another device using the same sync identifiers
  *
- *        This function switch automatically of frequency to 867900000, always returns 0 as delay in 
+ *        This function switch automatically of frequency to 867900000, always returns 0 as delay in
  *        the struct PHYSEC_RssiMsrmts, and if it fails to calculate a value because of timeout, then
  *        the corresponding value in the rssi_msrmts field is set to 0.
- * 
- * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller), 
- *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we 
+ *
+ * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller),
+ *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we
  *          could just reinitiate the measure, but for now it is safer)
  */
 static PHYSEC_RssiMsrmts *
@@ -2507,9 +2507,9 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
         if ( lora_send(buf, sizeof(buf), -1) != sizeof(buf) )
             return (void*) -1;
 
-        uint32_t start = mp_hal_ticks_ms(); 
+        uint32_t start = mp_hal_ticks_ms();
         uint8_t received = 0;
-        do 
+        do
         {
             memset(buf, 0, PHYSEC_DEV_ID_LEN);
             int32_t port = 1;
@@ -2523,7 +2523,7 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
                 // check if its our probe response
                 if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && *(uint8_t*) (buf+PHYSEC_DEV_ID_LEN) == (sync->cnt+1))
                 {
-                    m->rssi_msrmts[i] = lora->rssi; // contains the rssi of the last received lora pkt
+                    m->rssi_msrmts[i] = (lora->rssi & (~0x80)); // contains the rssi of the last received lora pkt
                     received = 1;
                 }
             }
@@ -2535,7 +2535,7 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
 
         sync->cnt += 2;
     }
-    m->delay = 0;
+    m->rssi_msrmts_delay = 0;
 
     cmd_data.info.init.frequency = freq;
     lora_send_cmd (&cmd_data);
@@ -2548,9 +2548,9 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
  *
  *        This function switch automatically of frequency to 867900000, and if it fails to calculate
  *        a value because of timeout, then the corresponding value in the rssi_msrmts field is set to 0.
- * 
- * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller), 
- *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we 
+ *
+ * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller),
+ *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we
  *          could just reinitiate the measure, but for now it is safer)
  */
 static PHYSEC_RssiMsrmts *
@@ -2575,7 +2575,7 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
     cmd_data.info.init.frequency = 867900000;
     cmd_data.cmd = E_LORA_CMD_INIT;
     lora_send_cmd (&cmd_data);
-    
+
     uint32_t sum_delay = 0;
     uint32_t start = 0;
     sync->cnt = 0;
@@ -2584,7 +2584,7 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
         uint8_t buf[PHYSEC_DEV_ID_LEN + 1] = { 0 };
         uint32_t now = 0;
         uint8_t received = 0;
-        do 
+        do
         {
             memset(buf, 0, sizeof(buf));
             int32_t size = lora_recv(buf, sizeof(buf), PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start), NULL);
@@ -2598,7 +2598,7 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
                 if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && buf[PHYSEC_DEV_ID_LEN] == sync->cnt)
                 {
 
-                    m->rssi_msrmts[i] = lora->rssi;
+                    m->rssi_msrmts[i] = (lora->rssi & (~0x80));
                     received = 1;
                 }
             }
@@ -2619,10 +2619,10 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
         }
 
         sync->cnt++;
-        start = mp_hal_ticks_ms(); 
+        start = mp_hal_ticks_ms();
     }
 
-    m->delay = (((float)(sum_delay / nb_measure) / 2) / PHYSEC_PROBE_TIMEOUT) * 100;
+    m->rssi_msrmts_delay = (((float)(sum_delay / nb_measure) / 2) / PHYSEC_PROBE_TIMEOUT) * 100;
 
     cmd_data.info.init.frequency = freq;
     lora_send_cmd (&cmd_data);
@@ -2630,8 +2630,8 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
     return m;
 }
 
-STATIC mp_obj_t 
-lora_initiate_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+STATIC mp_obj_t
+lora_initiate_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj)
 {
     lora_obj_t *lora_obj = (lora_obj_t*) self_in;
     size_t len = 0;
@@ -2665,7 +2665,7 @@ lora_initiate_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t
 
     mp_obj_t ret[2];
     ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
-    ret[1] = mp_obj_new_float(rssis->delay);        // delay
+    ret[1] = mp_obj_new_float(rssis->rssi_msrmts_delay);        // delay
 
     free(rssis);
 
@@ -2673,8 +2673,8 @@ lora_initiate_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_initiate_rssi_measure_driver_obj, lora_initiate_rssi_measure_driver);
 
-STATIC mp_obj_t 
-lora_wait_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+STATIC mp_obj_t
+lora_wait_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj)
 {
         lora_obj_t *lora_obj = (lora_obj_t*) self_in;
     size_t len = 0;
@@ -2708,7 +2708,7 @@ lora_wait_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_
 
     mp_obj_t ret[2];
     ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
-    ret[1] = mp_obj_new_float(rssis->delay);        // delay
+    ret[1] = mp_obj_new_float(rssis->rssi_msrmts_delay);        // delay
 
     free(rssis);
 
@@ -2716,10 +2716,10 @@ lora_wait_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_wait_rssi_measure_driver_obj, lora_wait_rssi_measure_driver);
 
-STATIC mp_obj_t 
-lora_initiate_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+STATIC mp_obj_t
+lora_initiate_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj)
 {
-    // retrieve params from python args 
+    // retrieve params from python args
     lora_obj_t *lora_obj = (lora_obj_t*) self_in;
     size_t len = 0;
     mp_obj_t *tuple, *ids;
@@ -2752,7 +2752,7 @@ lora_initiate_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_mea
 
     mp_obj_t ret[2];
     ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
-    ret[1] = mp_obj_new_float(rssis->delay);        // delay
+    ret[1] = mp_obj_new_float(rssis->rssi_msrmts_delay);        // delay
 
     free(rssis);
 
@@ -2760,8 +2760,8 @@ lora_initiate_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_mea
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_initiate_rssi_measure_obj, lora_initiate_rssi_measure);
 
-STATIC mp_obj_t 
-lora_wait_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj) 
+STATIC mp_obj_t
+lora_wait_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure_obj)
 {
     lora_obj_t *lora_obj = (lora_obj_t*) self_in;
     size_t len = 0;
@@ -2795,13 +2795,54 @@ lora_wait_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure
 
     mp_obj_t ret[2];
     ret[0] = mp_obj_new_list(rssis->nb_msrmts, rssis_obj);
-    ret[1] = mp_obj_new_float(rssis->delay);        // delay
+    ret[1] = mp_obj_new_float(rssis->rssi_msrmts_delay);        // delay
 
     free(rssis);
 
     return mp_obj_new_tuple(2, ret);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_wait_rssi_measure_obj, lora_wait_rssi_measure);
+
+STATIC mp_obj_t
+lora_physec_sandbox(mp_obj_t self){
+    printf("---------- > PHYSEC sandbox > -----------\n");
+
+    int8_t rssi_tmp[] = {48, 76, 98, 84, 56, 64, 72, 82, 98, 102};
+
+    PHYSEC_RssiMsrmts M;
+    M.nb_msrmts = 10;
+    M.rssi_msrmts = rssi_tmp;
+    M.rssi_msrmts_delay = 12;
+
+    printf("rssi original :");
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
+
+    }
+    printf("\n");
+
+    PHYSEC_RssiMsrmts M_filtered = PHYSEC_golay_filter(M);
+    printf("rssi filtered :");
+    for(int i = 0; i < M_filtered.nb_msrmts; i++){
+        printf(" %d", M_filtered.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    PHYSEC_RssiMsrmts M_estimated = PHYSEC_interpolation(M_filtered);
+    printf("rssi estimated :");
+    for(int i = 0; i < M_estimated.nb_msrmts; i++){
+        printf(" %d", M_estimated.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    free(M_estimated.rssi_msrmts);
+    free(M_filtered.rssi_msrmts);
+
+    printf("---------- < PHYSEC sandbox < -----------\n");
+
+    return mp_obj_new_int(0);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_physec_sandbox_obj, lora_physec_sandbox);
 #endif
 
 STATIC const mp_map_elem_t lora_locals_dict_table[] = {
@@ -2837,6 +2878,7 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure_ll),     (mp_obj_t)&lora_wait_rssi_measure_driver_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure), (mp_obj_t)&lora_initiate_rssi_measure_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure),     (mp_obj_t)&lora_wait_rssi_measure_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_physec_sandbox),     (mp_obj_t)&lora_physec_sandbox_obj },
 #endif
 
 #ifdef LORA_OPENTHREAD_ENABLED

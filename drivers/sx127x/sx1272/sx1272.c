@@ -1313,6 +1313,7 @@ void SX1272OnDio5Irq( void )
     }
 }
 
+
 #ifdef PHYSEC
 
 
@@ -1507,6 +1508,69 @@ IRAM_ATTR SX1272WaitRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures )
     }
 
     return m;
+}
+
+// Reciprocity enhancement
+
+// --- Filtering
+
+PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts){
+
+    int8_t coef[] = {-3, 12, 17, 12, -3};
+    float normalization;
+
+    int rssi_tmp; // it is not normalisze so int8_t is not a valid type.
+
+    PHYSEC_RssiMsrmts rssi_msermts_filterd;
+    rssi_msermts_filterd.nb_msrmts = rssi_msermts.nb_msrmts;
+    rssi_msermts_filterd.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
+
+    for(int i_rssi = 0; i_rssi < rssi_msermts.nb_msrmts; i_rssi++){
+
+        normalization = 0;
+        rssi_tmp = 0;
+
+        for(int i_coef = -2; i_coef < 3; i_coef++){
+            if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts.nb_msrmts){
+                rssi_tmp += coef[i_coef+2] * rssi_msermts.rssi_msrmts[i_rssi+i_coef];
+                normalization += coef[i_coef+2];
+            }
+        }
+
+        rssi_msermts_filterd.rssi_msrmts[i_rssi] = (int8_t) ((float)(rssi_tmp)/normalization);
+
+    }
+
+    return rssi_msermts_filterd;
+
+}
+
+// --- Interpolation
+
+PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
+
+    PHYSEC_RssiMsrmts rssi_msermts_estimation;
+    rssi_msermts_estimation.nb_msrmts = rssi_msermts.nb_msrmts;
+    rssi_msermts_estimation.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
+    rssi_msermts_estimation.rssi_msrmts_delay = 0;
+
+    int8_t delta_rssi;
+    float rssi_err;
+
+    if(rssi_msermts.nb_msrmts > 0 && rssi_msermts.rssi_msrmts_delay > 0){
+
+        rssi_msermts_estimation.rssi_msrmts[0] = rssi_msermts.rssi_msrmts[0];
+
+        for(int i = 1; i < rssi_msermts.nb_msrmts; i++){
+            delta_rssi = rssi_msermts.rssi_msrmts[i] - rssi_msermts.rssi_msrmts[i-1];
+            rssi_err = (float) (rssi_msermts.rssi_msrmts_delay * delta_rssi) / (float) (100);
+            rssi_msermts_estimation.rssi_msrmts[i] = rssi_msermts.rssi_msrmts[i] - rssi_err;
+        }
+
+    }
+
+    return rssi_msermts_estimation;
+
 }
 
 #endif // PHYSEC

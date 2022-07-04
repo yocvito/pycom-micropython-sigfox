@@ -2523,7 +2523,7 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
                 // check if its our probe response
                 if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && *(uint8_t*) (buf+PHYSEC_DEV_ID_LEN) == (sync->cnt+1))
                 {
-                    m->rssi_msrmts[i] = (lora->rssi & (~0x80)); // contains the rssi of the last received lora pkt
+                    m->rssi_msrmts[i] = abs(lora->rssi); // contains the rssi of the last received lora pkt
                     received = 1;
                 }
             }
@@ -2598,7 +2598,7 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
                 if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && buf[PHYSEC_DEV_ID_LEN] == sync->cnt)
                 {
 
-                    m->rssi_msrmts[i] = (lora->rssi & (~0x80));
+                    m->rssi_msrmts[i] = abs(lora->rssi);
                     received = 1;
                 }
             }

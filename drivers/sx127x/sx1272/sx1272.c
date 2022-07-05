@@ -1313,7 +1313,7 @@ void SX1272OnDio5Irq( void )
     }
 }
 
-
+#define PHYSEC
 #ifdef PHYSEC
 
 
@@ -1616,23 +1616,86 @@ void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_wind
     memcpy(rssi_window, tmp_tab);
 }
 
-void PHYSEC_quntification_compute_bin(int8_t *rssi_window, int8_t *bin_len, int8_t *q_0, int8_t *q_m){
-
-    PHYSEC_quntification_sort_rssi_window(rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN);
+void PHYSEC_quntification_compute_bin(int8_t *sorted_rssi_window, int8_t *bin_len, int8_t *q_0, int8_t *q_m){
     
     int8_t bin_tmp;
 
-    *bin_len = abs(rssi_window[1] - rssi_window[0])
+    *bin_len = abs(sorted_rssi_window[1] - sorted_rssi_window[0])
     for(int i = 2 ; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
-        bin_tmp = abs(rssi_window[i] - rssi_window[i-1]);
+        bin_tmp = abs(sorted_rssi_window[i] - sorted_rssi_window[i-1]);
         if(bin_tmp < *bin_len){
             *bin_len = bin_tmp;
         }
     }
 
-    *q_0 = rssi_window[0];
-    *q_m = rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN-1];
+    *q_0 = sorted_rssi_window[0];
+    *q_m = sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN-1];
 }
 
+char *PHYSEC_quntification_compute_hist(
+    int8_t *rssi_window,
+    int8_t *bin_len, int8_t *q_0, int8_t *q_m,
+    uint16_t *hist_size
+){
+
+    int8_t *rssi_window_sorted[PHYSEC_QUNTIFICATION_WINDOW_LEN];
+    memcpy(rssi_window_sorted, rssi_window);
+
+    PHYSEC_quntification_sort_rssi_window(rssi_window_sorted, PHYSEC_QUNTIFICATION_WINDOW_LEN);
+    
+    PHYSEC_quntification_compute_bin(sorted_rssi_window, bin_len, q_0, q_m);
+
+    *hist_size = (uint16_t)(((float)(q_m -q_0))/((float)(bin_len))) +1;
+    char *hist = malloc(*hist_size * sizeof(char));
+
+    int rssi_i = 0;
+    for(int i = 0; i < *hist_size; i++){
+        if(sorted_rssi_window[rssi_i] >= *q_0 +i*(*bin_len)){
+            hist[i] = 1;
+            rssi_i++;
+        }else{
+            hist[i] = 0;
+        }
+    }
+
+    return hist;
+
+}
+
+
+
+int PHYSEC_quntification_compute_level_nbr(int8_t *rssi_window){
+
+    double entropy = 0;
+
+    for(int i = 0; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+        entropy += rssi_window[i] * log2(rssi_window[i]); 
+    }
+}
+
+/*
+    Return value :
+        0   : Success.
+        -1  : The number of rssi measurement is not enough to generate the key.
+*/
+int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output){
+
+    uint8_t nbr_of_bit_generated = 0;
+    uint8_t nbr_of_processed_windows = 0;
+    int8_t *rssi_window;
+
+    while(nbr_of_bit_generated < PHYSEC_KEY_LEN){
+
+        if(rssi_msermts.nb_msrmts - nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN < PHYSEC_QUNTIFICATION_WINDOW_LEN){
+            return -1;
+        }
+
+        rssi_window = rssi_msermts.rssi_msrmts+nbr_of_processed_windows;
+
+
+
+    }
+
+}
 
 #endif // PHYSEC

@@ -1643,39 +1643,45 @@ void PHYSEC_quntification_compute_bin(int8_t *sorted_rssi_window, int8_t *bin_le
     *q_m = sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN-1];
 }
 
-char *PHYSEC_quntification_compute_hist(
-    int8_t *rssi_window,
-    int8_t *bin_len, int8_t *q_0, int8_t *q_m,
-    uint16_t *hist_size
-){
+struct histogram{
+    int8_t q_0;
+    int8_t q_m;
+    int8_t bin_len;
+    uint16_t hist_size;
+    int8_t *hist;
+};
+
+struct histogram PHYSEC_quntification_compute_hist(int8_t *rssi_window){
+
+    struct histogram hist;
 
     int8_t sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN];
     memcpy(sorted_rssi_window, rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN*sizeof(int8_t));
 
     PHYSEC_quntification_sort_rssi_window(sorted_rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN);
 
-    PHYSEC_quntification_compute_bin(sorted_rssi_window, bin_len, q_0, q_m);
+    PHYSEC_quntification_compute_bin(sorted_rssi_window, &(hist.bin_len), &(hist.q_0), &(hist.q_m));
 
-    *hist_size = (uint16_t)(((float)((*q_m) -(*q_0)))/((float)(*bin_len))) +1;
-    char *hist = malloc(*hist_size * sizeof(char));
+    hist.hist_size = (uint16_t)(((float)((hist.q_m) -(hist.q_0)))/((float)(hist.bin_len))) +1;
+    hist.hist = malloc(hist.hist_size * sizeof(char));
 
     int rssi_i = 0;
 
-    for(int i = 0; i < *hist_size; i++){
+    for(int i = 0; i < hist.hist_size; i++){
 
 
         if(
-            sorted_rssi_window[rssi_i] >= (*q_0) +i*(*bin_len) &&
-            sorted_rssi_window[rssi_i] < (*q_0) +(i+1)*(*bin_len)
+            sorted_rssi_window[rssi_i] >= hist.q_0 +i*hist.bin_len &&
+            sorted_rssi_window[rssi_i] < hist.q_0 +(i+1)*hist.bin_len
         ){
-            hist[i] = 1;
+            hist.hist[i] = 1;
             rssi_i++;
             while(sorted_rssi_window[rssi_i] == sorted_rssi_window[rssi_i-1]){
-                hist[i]++;
+                hist.hist[i]++;
                 rssi_i++;
             }
         }else{
-            hist[i] = 0;
+            hist.hist[i] = 0;
         }
     }
 

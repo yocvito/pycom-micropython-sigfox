@@ -421,11 +421,6 @@ PHYSEC_RssiMsrmts *SX1272WaitRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_me
 PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts);
 PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts);
 
-char *PHYSEC_quntification_compute_hist(
-    int8_t *rssi_window,
-    int8_t *bin_len, int8_t *q_0, int8_t *q_m,
-    uint16_t *hist_size
-);
 
 int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output);
 

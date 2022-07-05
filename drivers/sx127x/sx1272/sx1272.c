@@ -1622,10 +1622,14 @@ void PHYSEC_quntification_compute_bin(int8_t *sorted_rssi_window, int8_t *bin_le
 
     *bin_len = abs(sorted_rssi_window[1] - sorted_rssi_window[0])
     for(int i = 2 ; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+        
         bin_tmp = abs(sorted_rssi_window[i] - sorted_rssi_window[i-1]);
+        if(bin_tmp == 0) continue;
+        
         if(bin_tmp < *bin_len){
             *bin_len = bin_tmp;
         }
+
     }
 
     *q_0 = sorted_rssi_window[0];
@@ -1649,10 +1653,17 @@ char *PHYSEC_quntification_compute_hist(
     char *hist = malloc(*hist_size * sizeof(char));
 
     int rssi_i = 0;
+
     for(int i = 0; i < *hist_size; i++){
-        if(sorted_rssi_window[rssi_i] >= *q_0 +i*(*bin_len)){
+
+
+        if(sorted_rssi_window[rssi_i] >= (*q_0) +i*(*bin_len)){
             hist[i] = 1;
             rssi_i++;
+            while(sorted_rssi_window[rssi_i] == sorted_rssi_window[rssi_i-1]){
+                hist[i]++;
+                rssi_i++;
+            }
         }else{
             hist[i] = 0;
         }

@@ -1691,14 +1691,20 @@ struct histogram PHYSEC_quntification_compute_hist(int8_t *rssi_window){
 
 
 
-// int PHYSEC_quntification_compute_level_nbr(int8_t *rssi_window){
+int8_t PHYSEC_quntification_compute_level_nbr(struct histogram hist){
 
-//     double entropy = 0;
+    double entropy = 0;
+    double proba;
 
-//     for(int i = 0; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
-//         entropy += rssi_window[i] * log2(rssi_window[i]); 
-//     }
-// }
+    for(int i = 0; i < hist.hist_size; i++){
+        if(hist.hist[i]>0){
+            proba = ((double)(hist.hist[i]))/((double)(PHYSEC_QUNTIFICATION_WINDOW_LEN));
+            entropy +=  proba*log2(proba); 
+        }
+    }
+
+    return (int8_t) (-entropy);
+}
 
 // /*
 //     Return value :

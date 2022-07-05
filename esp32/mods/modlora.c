@@ -2462,6 +2462,7 @@ STATIC mp_obj_t lora_reset (mp_obj_t self_in) {
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 
+#define PHYSEC
 #ifdef PHYSEC
 /*!
  * \brief Initiate an Rssi measurement procedure with another device using the same sync identifiers
@@ -2807,7 +2808,7 @@ STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
 
-    int8_t rssi_tmp[] = {48, 76, 98, 84, 56, 64, 72, 82, 98, 102};
+    int8_t rssi_tmp[] = {48, 76, 82, 98, 76, 82, 82, 82, 82, 86};
 
     PHYSEC_RssiMsrmts M;
     M.nb_msrmts = 10;
@@ -2835,6 +2836,25 @@ lora_physec_sandbox(mp_obj_t self){
     }
     printf("\n");
 
+    printf("histogram :\n");
+    int8_t bin_len, q_0, q_m;
+    uint16_t hist_size;
+    char *hist = PHYSEC_quntification_compute_hist(
+        M_estimated.rssi_msrmts,
+        &bin_len, &q_0, &q_m,
+        &hist_size
+    );
+    printf("\tq_0 : %d\n", q_0);
+    printf("\tq_m : %d\n", q_m);
+    printf("\tbin_len : %d\n", bin_len);
+    printf("\thist_size : %d\n", hist_size);
+    printf("\thist = [");
+    for(int i = 0; i < hist_size; i++){
+        printf(" %d", hist[i]);
+    }
+    printf("]\n");
+
+    free(hist);
     free(M_estimated.rssi_msrmts);
     free(M_filtered.rssi_msrmts);
 

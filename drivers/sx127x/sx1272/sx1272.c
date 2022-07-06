@@ -1576,7 +1576,7 @@ PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
 // Key generation
 
 /*
-    128 bits = 16 bytes = a 16-chat-table.
+    128 bits = 16 bytes = a 16-char-table.
     For now, if this value is changed, the code will not going to adapt.
 */
 #define PHYSEC_KEY_LEN 128 // bits.
@@ -1622,6 +1622,71 @@ void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_wind
 
     memcpy(rssi_window, tmp_tab, rssi_window_size*sizeof(int8_t));
 }
+
+// ---> Density function estimation
+
+struct density {
+    int8_t q_0;
+    uint16_t bin_nbr;
+    int8_t *bins;
+    double *values;
+};
+
+struct density PHYSEC_quntification_get_density(int8_t *rssi_window){
+
+    struct density d;
+    
+    int8_t last_ele;
+
+    // sorting
+    int8_t sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN];
+    memcpy(sorted_rssi_window, rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN*sizeof(int8_t));
+    PHYSEC_quntification_sort_rssi_window(sorted_rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN);
+
+    // q_0
+    d.q_0 = sorted_rssi_window[0];
+
+    // bins number
+    last_ele = sorted_rssi_window[0];
+    d.bin_nbr = 0;
+    for(int i = 1; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+        if(sorted_rssi_window[i] != last_ele){
+            d.bin_nbr++;
+            last_ele = sorted_rssi_window[i];
+        }
+    }
+
+    // bins & values
+    d.bins = malloc(d.bin_nbr * sizeof(int8_t));
+    d.values = malloc(d.bin_nbr * sizeof(double));
+    
+    last_ele = sorted_rssi_window[0];
+    char rep_nbr = 1;
+    int j = 0;
+    for(int i = 1; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+        if(sorted_rssi_window[i] != last_ele){
+            
+            d.bins[j] = sorted_rssi_window[i] - last_ele;
+            d.values[j] = 1.0/((double)(d.bins[j]*PHYSEC_QUNTIFICATION_WINDOW_LEN))*((double)rep_nbr);
+            j++;
+
+            last_ele = sorted_rssi_window[i];
+            rep_nbr = 1;
+        }else{
+            rep_nbr++;
+        }
+    }
+
+    return d;
+
+}
+
+void PHYSEC_quntification_free_density(struct density d){
+    free(d.bins);
+    free(d.values);
+}
+
+// <--- Density function estimation
 
 void PHYSEC_quntification_compute_bin(int8_t *sorted_rssi_window, int8_t *bin_len, int8_t *q_0, int8_t *q_m){
     
@@ -1709,30 +1774,51 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct histogram hist){
     return pow(2,nbr_bit);
 }
 
-// /*
-//     Return value :
-//         0   : Success.
-//         -1  : The number of rssi measurement is not enough to generate the key.
-// */
-// int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output){
+/*
+    Return value :
+        number of generated bit (from left)
+*/
+int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output){
 
-//     uint8_t nbr_of_bit_generated = 0;
-//     uint8_t nbr_of_processed_windows = 0;
-//     int8_t *rssi_window;
-
-//     while(nbr_of_bit_generated < PHYSEC_KEY_LEN){
-
-//         if(rssi_msermts.nb_msrmts - nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN < PHYSEC_QUNTIFICATION_WINDOW_LEN){
-//             return -1;
-//         }
-
-//         rssi_window = rssi_msermts.rssi_msrmts+nbr_of_processed_windows;
+    uint8_t nbr_of_bit_generated = 0;
+    uint8_t nbr_of_processed_windows = 0;
+    uint16_t rssi_window_align_index = 0;
+    int8_t *rssi_window;
+    struct histogram hist;
+    int8_t qunatification_level_nbr;
 
 
+    // filtering
+    PHYSEC_RssiMsrmts rssi_msermts_filtered = PHYSEC_golay_filter(rssi_msermts);
+    free(rssi_msermts.rssi_msrmts);
 
-//     }
+    // same time measure estimation
+    PHYSEC_RssiMsrmts rssi_msermts_estimated = PHYSEC_interpolation(rssi_msermts_filtered);
+    free(rssi_msermts_filtered.rssi_msrmts);
+    rssi_msermts.rssi_msrmts = rssi_msermts_estimated.rssi_msrmts;
 
-// }
+    while(rssi_window_align_index  < rssi_msermts.nb_msrmts){
+
+        rssi_window = rssi_msermts.rssi_msrmts+rssi_window_align_index;
+
+        // // computing hist
+        // hist = PHYSEC_quntification_compute_hist(rssi_window);
+
+        // // computing level number
+        // qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(hist);
+
+        // int8_t thresholds[qunatification_level_nbr+1];
+        // int8_t band[qunatification_level_nbr-1];
+
+
+
+        nbr_of_processed_windows++;
+        rssi_window_align_index = (uint16_t)(nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN);
+    }
+
+    return nbr_of_bit_generated;
+
+}
 
 void PHYSEC_signal_processing_test(){
 
@@ -1764,22 +1850,38 @@ void PHYSEC_signal_processing_test(){
     }
     printf("\n");
 
-    printf("histogram :\n");
-    struct histogram hist = PHYSEC_quntification_compute_hist(M_estimated.rssi_msrmts);
-    printf("\tq_0 : %d\n", hist.q_0);
-    printf("\tq_m : %d\n", hist.q_m);
-    printf("\tbin_len : %d\n", hist.bin_len);
-    printf("\thist_size : %d\n", hist.hist_size);
-    printf("\thist = [");
-    for(int i = 0; i < hist.hist_size; i++){
-        printf(" %d", hist.hist[i]);
+    // printf("histogram :\n");
+    // struct histogram hist = PHYSEC_quntification_compute_hist(M_estimated.rssi_msrmts);
+    // printf("\tq_0 : %d\n", hist.q_0);
+    // printf("\tq_m : %d\n", hist.q_m);
+    // printf("\tbin_len : %d\n", hist.bin_len);
+    // printf("\thist_size : %d\n", hist.hist_size);
+    // printf("\thist = [");
+    // for(int i = 0; i < hist.hist_size; i++){
+    //     printf(" %d", hist.hist[i]);
+    // }
+    // printf("]\n");
+
+    // int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(hist);
+    // printf("Quantification level number : %d\n", qunatification_level_nbr);
+
+
+    printf("density estimation :\n");
+    struct density density = PHYSEC_quntification_get_density(M_estimated.rssi_msrmts);
+    printf("\tq_0 : %d\n", density.q_0);
+    printf("\tbin_nbr : %d\n", density.bin_nbr);
+    printf("\tbins = [");
+    for(int i = 0; i < density.bin_nbr; i++){
+        printf(" %d", density.bins[i]);
+    }
+    printf("]\n");
+    printf("\tvalues = [");
+    for(int i = 0; i < density.bin_nbr; i++){
+        printf(" %lf", density.values[i]);
     }
     printf("]\n");
 
-    int qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(hist);
-    printf("Quantification level number : %d\n", qunatification_level_nbr);
-
-    free(hist.hist);
+    PHYSEC_quntification_free_density(density);
     free(M_estimated.rssi_msrmts);
     free(M_filtered.rssi_msrmts);
 

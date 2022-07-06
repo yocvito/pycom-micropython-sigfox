@@ -424,4 +424,6 @@ PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts);
 
 int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output);
 
+void PHYSEC_signal_processing_test();
+
 #endif // __SX1272_H__

@@ -1695,6 +1695,7 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct histogram hist){
 
     double entropy = 0;
     double proba;
+    int8_t nbr_bit; 
 
     for(int i = 0; i < hist.hist_size; i++){
         if(hist.hist[i]>0){
@@ -1703,7 +1704,9 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct histogram hist){
         }
     }
 
-    return (int8_t) (-entropy);
+    nbr_bit = (int8_t) (-entropy);
+
+    return pow(2,nbr_bit);
 }
 
 // /*
@@ -1730,5 +1733,56 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct histogram hist){
 //     }
 
 // }
+
+void PHYSEC_signal_processing_test(){
+
+    int8_t rssi_tmp[] = {48, 76, 79, 79, 79, 79, 79, 95, 102, 86};
+
+    PHYSEC_RssiMsrmts M;
+    M.nb_msrmts = 10;
+    M.rssi_msrmts = rssi_tmp;
+    M.rssi_msrmts_delay = 12;
+
+    printf("rssi original :");
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
+
+    }
+    printf("\n");
+
+    PHYSEC_RssiMsrmts M_filtered = PHYSEC_golay_filter(M);
+    printf("rssi filtered :");
+    for(int i = 0; i < M_filtered.nb_msrmts; i++){
+        printf(" %d", M_filtered.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    PHYSEC_RssiMsrmts M_estimated = PHYSEC_interpolation(M_filtered);
+    printf("rssi estimated :");
+    for(int i = 0; i < M_estimated.nb_msrmts; i++){
+        printf(" %d", M_estimated.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    printf("histogram :\n");
+    struct histogram hist = PHYSEC_quntification_compute_hist(M_estimated.rssi_msrmts);
+    printf("\tq_0 : %d\n", hist.q_0);
+    printf("\tq_m : %d\n", hist.q_m);
+    printf("\tbin_len : %d\n", hist.bin_len);
+    printf("\thist_size : %d\n", hist.hist_size);
+    printf("\thist = [");
+    for(int i = 0; i < hist.hist_size; i++){
+        printf(" %d", hist.hist[i]);
+    }
+    printf("]\n");
+
+    int qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(hist);
+    printf("Quantification level number : %d\n", qunatification_level_nbr);
+
+    free(hist.hist);
+    free(M_estimated.rssi_msrmts);
+    free(M_filtered.rssi_msrmts);
+
+}
 
 #endif // PHYSEC

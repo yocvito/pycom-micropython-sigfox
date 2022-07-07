@@ -1715,84 +1715,16 @@ int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density d){
 
 // <--- Density function estimation
 
-// Histogram approach
-// void PHYSEC_quntification_compute_bin(int8_t *sorted_rssi_window, int8_t *bin_len, int8_t *q_0, int8_t *q_m){
-    
-//     int8_t bin_tmp;
 
-//     *bin_len = abs(sorted_rssi_window[1] - sorted_rssi_window[0]);
-//     for(int i = 2 ; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
-        
-//         bin_tmp = abs(sorted_rssi_window[i] - sorted_rssi_window[i-1]);
-//         if(bin_tmp == 0) continue;
-        
-//         if(bin_tmp < *bin_len){
-//             *bin_len = bin_tmp;
-//         }
-
-//     }
-
-//     *q_0 = sorted_rssi_window[0];
-//     *q_m = sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN-1];
-// }
-
-// struct histogram{
-//     int8_t q_0;
-//     int8_t q_m;
-//     int8_t bin_len;
-//     uint16_t hist_size;
-//     int8_t *hist;
-// };
-
-// struct histogram PHYSEC_quntification_compute_hist(int8_t *rssi_window){
-
-//     struct histogram hist;
-
-//     int8_t sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN];
-//     memcpy(sorted_rssi_window, rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN*sizeof(int8_t));
-
-//     PHYSEC_quntification_sort_rssi_window(sorted_rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN);
-
-//     PHYSEC_quntification_compute_bin(sorted_rssi_window, &(hist.bin_len), &(hist.q_0), &(hist.q_m));
-
-//     hist.hist_size = (uint16_t)(((float)((hist.q_m) -(hist.q_0)))/((float)(hist.bin_len))) +1;
-//     hist.hist = malloc(hist.hist_size * sizeof(char));
-
-//     int rssi_i = 0;
-
-//     for(int i = 0; i < hist.hist_size; i++){
-
-
-//         if(
-//             sorted_rssi_window[rssi_i] >= hist.q_0 +i*hist.bin_len &&
-//             sorted_rssi_window[rssi_i] < hist.q_0 +(i+1)*hist.bin_len
-//         ){
-//             hist.hist[i] = 1;
-//             rssi_i++;
-//             while(sorted_rssi_window[rssi_i] == sorted_rssi_window[rssi_i-1]){
-//                 hist.hist[i]++;
-//                 rssi_i++;
-//             }
-//         }else{
-//             hist.hist[i] = 0;
-//         }
-//     }
-
-//     return hist;
-
-// }
-
-
-
-int8_t PHYSEC_quntification_compute_level_nbr(struct histogram hist){
+int8_t PHYSEC_quntification_compute_level_nbr(struct density d){
 
     double entropy = 0;
     double proba;
     int8_t nbr_bit; 
 
-    for(int i = 0; i < hist.hist_size; i++){
-        if(hist.hist[i]>0){
-            proba = ((double)(hist.hist[i]))/((double)(PHYSEC_QUNTIFICATION_WINDOW_LEN));
+    for(int i = 0; i < d.bin_nbr; i++){
+        proba = d.values[i] * d.bins[i];
+        if(proba>0){
             entropy +=  proba*log2(proba); 
         }
     }
@@ -1812,7 +1744,6 @@ int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output){
     uint8_t nbr_of_processed_windows = 0;
     uint16_t rssi_window_align_index = 0;
     int8_t *rssi_window;
-    struct histogram hist;
     int8_t qunatification_level_nbr;
 
 
@@ -1850,7 +1781,7 @@ int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output){
 
 void PHYSEC_signal_processing_test(){
 
-    int8_t rssi_tmp[] = {48, 76, 79, 79, 79, 79, 79, 95, 102, 86};
+    int8_t rssi_tmp[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
 
     PHYSEC_RssiMsrmts M;
     M.nb_msrmts = 10;
@@ -1878,22 +1809,6 @@ void PHYSEC_signal_processing_test(){
     }
     printf("\n");
 
-    // printf("histogram :\n");
-    // struct histogram hist = PHYSEC_quntification_compute_hist(M_estimated.rssi_msrmts);
-    // printf("\tq_0 : %d\n", hist.q_0);
-    // printf("\tq_m : %d\n", hist.q_m);
-    // printf("\tbin_len : %d\n", hist.bin_len);
-    // printf("\thist_size : %d\n", hist.hist_size);
-    // printf("\thist = [");
-    // for(int i = 0; i < hist.hist_size; i++){
-    //     printf(" %d", hist.hist[i]);
-    // }
-    // printf("]\n");
-
-    // int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(hist);
-    // printf("Quantification level number : %d\n", qunatification_level_nbr);
-
-
     printf("density estimation :\n");
     struct density density = PHYSEC_quntification_get_density(M_estimated.rssi_msrmts);
     printf("\tq_0 : %d\n", density.q_0);
@@ -1908,6 +1823,9 @@ void PHYSEC_signal_processing_test(){
         printf(" %lf", density.values[i]);
     }
     printf("]\n");
+
+    int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(density);
+    printf("Quantification level number : %d\n", qunatification_level_nbr);
 
     PHYSEC_quntification_free_density(density);
     free(M_estimated.rssi_msrmts);

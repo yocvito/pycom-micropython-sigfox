@@ -24,10 +24,12 @@ Maintainer: Miguel Luis and Gregory Cristian
  */
 
 // Device ID length for KEY GENERATION
-#define PHYSEC_DEV_ID_LEN          6
-#define PHYSEC_KEYGEN_FREQUENCY    867900000
-#define PHYSEC_PROBE_TIMEOUT       500         // 500 ms
-#define PHYSEC_SYNC_WORD    0x67
+#define PHYSEC_DEV_ID_LEN           6
+#define PHYSEC_KEYGEN_FREQUENCY     867900000
+#define PHYSEC_PROBE_TIMEOUT        500         // 500 ms
+#define PHYSEC_SYNC_WORD            0x67
+#define PHYSEC_PROBE_REC_TIMEOUT    5000
+#define PHYSEC_N_MAX_MEASURE        255
 
 /*!
  * Structure to stores the rssi measurments extracted from transceiver
@@ -37,7 +39,7 @@ Maintainer: Miguel Luis and Gregory Cristian
  *  = 0 in case of initiating measurments
  */
 typedef struct _PHYSEC_RssiMsrmts {
-    uint16_t nb_msrmts;
+    uint8_t nb_msrmts;
     int8_t *rssi_msrmts;
     float rssi_msrmts_delay;
 } PHYSEC_RssiMsrmts;

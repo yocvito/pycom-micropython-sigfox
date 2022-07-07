@@ -2464,6 +2464,229 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 
 #define PHYSEC
 #ifdef PHYSEC
+
+typedef struct _PHYSEC_probe {
+    uint8_t id[PHYSEC_DEV_ID_LEN];
+    uint8_t cnt;
+} PHYSEC_probe;
+
+#define PHYSEC_PKT_SENTINEL     0xFE69
+typedef struct _PHYSEC_reconcil_probe {
+    uint8_t id[PHYSEC_DEV_ID_LEN];
+    union {
+        struct {
+            uint8_t new_len;
+            uint8_t ssi[PHYSEC_N_MAX_MEASURE];
+        } ans;
+        uint8_t req[PHYSEC_N_MAX_MEASURE];
+    } payload;
+} PHYSEC_reconcil_probe;
+
+static inline uint16_t
+toa(uint8_t sf)
+{
+    switch(sf) {
+        case 7:
+            return 41;
+        case 8:
+            return 72;
+        case 9:
+            return 144;
+        case 10:
+            return 289;
+        case 11:
+            return 578;
+        case 12:
+            return 991;
+    }
+    return 0;
+}
+
+/**
+ * \brief
+ *
+ * \param id
+ * \param probe_cnt
+ * \param timeout
+ * \param rssi
+ * \param start
+ * \return true probe has been received, rssi contains pkt rssi and the time contains
+ * \return false probe hasn't been received
+ */
+static bool
+wait_probe(const uint8_t *id, const uint8_t probe_cnt, int8_t *rssi, uint32_t *duration, bool first_no_timeout)
+{
+    PHYSEC_probe probe;
+    uint32_t start = mp_hal_ticks_ms();
+    bool received = false;
+    if (duration != NULL)
+        *duration = PHYSEC_PROBE_TIMEOUT;
+    do
+    {
+        memset(&probe, 0, sizeof(PHYSEC_probe));
+        int32_t size = lora_recv((uint8_t*) &probe, sizeof(PHYSEC_probe), PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start), NULL);
+        if (size == sizeof(PHYSEC_probe))
+        {
+            // check if its our probe response
+            if (memcmp(&(probe.id), id, PHYSEC_DEV_ID_LEN) == 0 && probe.cnt == probe_cnt)
+            {
+#if PHYSEC_DEBUG
+                printf("<<< PROBE RECEIVED\n");
+                hexdump((uint8_t*)&probe, sizeof(PHYSEC_probe));
+                printf("\n");
+#endif
+                if (rssi != NULL)
+                    *rssi = abs(lora_obj.rssi); // contains the rssi of the last received lora pkt
+                if (duration != NULL)
+                    *duration = mp_hal_ticks_ms();
+                received = true;
+            }
+        }
+
+    } while( !received && (first_no_timeout || mp_hal_ticks_ms()-start < PHYSEC_PROBE_TIMEOUT) );
+    return received;
+}
+
+static inline uint8_t
+get_inter(const uint8_t *ssi, const uint8_t *ssi2, const uint8_t nb_measure, uint8_t *inter_ptr)
+{
+    uint8_t *inter = inter_ptr;
+    memset(inter, 0, nb_measure);
+    uint8_t final_m_nb = 0;
+    for (int i=0; i<nb_measure; i++)
+    {
+        if (ssi[i] != 0 && ssi2[i] != 0)
+        {
+            final_m_nb ++;
+            inter[i] = 1;
+        }
+    }
+    return final_m_nb;
+}
+
+static inline int8_t *
+select_inter_measures(PHYSEC_RssiMsrmts *m, const uint8_t *inter, const uint8_t new_m_nb)
+{
+    int8_t *final_rssi_arr  = calloc(new_m_nb, sizeof(int8_t));
+    uint8_t idx = 0;
+    for (int i=0; i<m->nb_msrmts; i++)
+    {
+        if (inter[i] == 1)
+        {
+            final_rssi_arr[idx] = m->rssi_msrmts[i];
+            idx++ ;
+        }
+    }
+    return final_rssi_arr;
+}
+
+static bool
+probe_reconciliate(PHYSEC_RssiMsrmts *m, const PHYSEC_Sync *sync, const uint8_t *ssi, int32_t timeout, bool waiter)
+{
+    bool reconciliated = false;
+    uint32_t start_rec = mp_hal_ticks_ms();
+    // this is not about Keys reconciliation, but just about selecting the measure we
+    // were able to do on both side
+    while (timeout > 0 && !reconciliated)
+    {
+        if (!waiter)
+        {
+            PHYSEC_reconcil_probe probe = { 0 };
+            memcpy(&(probe.id), sync->dev_id, PHYSEC_DEV_ID_LEN);
+            memcpy(&(probe.payload.req), ssi, m->nb_msrmts);
+            uint16_t pkt_len = sizeof(PHYSEC_reconcil_probe)-(PHYSEC_N_MAX_MEASURE-(m->nb_msrmts));
+            uint8_t buf[sizeof(PHYSEC_reconcil_probe)] = { 0 };
+            memcpy(buf, &probe, pkt_len);
+            lora_send(buf, pkt_len, -1);
+#if PHYSEC_DEBUG
+            printf(">>> PROBE RECONCILIATION PKT SENT\n");
+            hexdump((uint8_t*)&probe, pkt_len);
+            printf("\n");
+#endif
+            do {
+                memset(buf, 0, sizeof(buf));
+                timeout = PHYSEC_PROBE_REC_TIMEOUT-(mp_hal_ticks_ms()-start_rec);
+                if (timeout <= 0)
+                    break;
+            } while (lora_recv(buf, pkt_len, timeout, NULL) != pkt_len);
+
+            memset(buf+pkt_len, 0, sizeof(buf) - pkt_len);
+            PHYSEC_reconcil_probe *probe_ans = (PHYSEC_reconcil_probe*) buf;
+
+            if (memcmp(probe_ans->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN) == 0)
+            {
+#if PHYSEC_DEBUG
+                printf("<<< PROBE RECONCILIATION PKT RECEIVED\n");
+                hexdump((uint8_t*)probe_ans, pkt_len);
+                printf("\n");
+#endif
+                uint8_t final_m_nb = probe_ans->payload.ans.new_len;
+                // payload doesn't carry intersection of measurements if we achieved
+                // to measure all probes on both side
+                if (final_m_nb < m->nb_msrmts)
+                {
+                    int8_t *final_rssi_arr  = select_inter_measures(m, probe_ans->payload.ans.ssi, probe_ans->payload.ans.new_len);
+                    m->nb_msrmts = final_m_nb;
+                    free(m->rssi_msrmts);
+                    m->rssi_msrmts = final_rssi_arr;
+                }
+                reconciliated = true;
+            }
+        }
+        else
+        {
+            uint8_t buf [ sizeof(PHYSEC_reconcil_probe) ] = { 0 };
+            uint16_t pkt_len = sizeof(PHYSEC_reconcil_probe) - (PHYSEC_N_MAX_MEASURE-(m->nb_msrmts));
+            do {
+                memset(buf, 0, sizeof(buf));
+                timeout = PHYSEC_PROBE_REC_TIMEOUT-(mp_hal_ticks_ms()-start_rec);
+                if (timeout <= 0)
+                    break;
+            } while (lora_recv(buf, pkt_len, timeout, NULL) != pkt_len);
+
+            PHYSEC_reconcil_probe *probe_req = (PHYSEC_reconcil_probe*) buf;
+
+            if (memcmp(probe_req->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN) == 0)
+            {
+#if PHYSEC_DEBUG
+                printf("<<< PROBE RECONCILIATION PKT RECEIVED\n");
+                hexdump((uint8_t*)probe_req, pkt_len);
+                printf("\n");
+#endif
+                uint8_t inter[m->nb_msrmts];
+                uint8_t final_m_nb = get_inter(ssi, probe_req->payload.req, m->nb_msrmts, &inter);
+
+                PHYSEC_reconcil_probe probe_ans = { 0 };
+                memcpy(&(probe_ans.id), sync->dev_id, PHYSEC_DEV_ID_LEN);
+                probe_ans.payload.ans.new_len = final_m_nb;
+                memcpy(&(probe_ans.payload.ans.ssi), inter, m->nb_msrmts);
+
+                memset(buf, 0, sizeof(buf));
+                memcpy(buf, &probe_ans, sizeof(PHYSEC_reconcil_probe));
+                lora_send(buf, pkt_len, -1);
+#if PHYSEC_DEBUG
+                printf(">>> PROBE RECONCILIATION PKT SENT\n");
+                hexdump((uint8_t*)&probe_ans, pkt_len);
+                printf("\n");
+#endif
+
+                if (final_m_nb < m->nb_msrmts)
+                {
+                    int8_t *final_rssi_arr  = select_inter_measures(m, inter, probe_ans.payload.ans.new_len);
+                    m->nb_msrmts = final_m_nb;
+                    free(m->rssi_msrmts);
+                    m->rssi_msrmts = final_rssi_arr;
+                }
+
+                reconciliated = true;
+            }
+        }
+
+    }
+
+    return reconciliated;
+}
+
 /*!
  * \brief Initiate an Rssi measurement procedure with another device using the same sync identifiers
  *
@@ -2474,11 +2697,12 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
  * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller),
  *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we
  *          could just reinitiate the measure, but for now it is safer)
+ * \warning This implementation could returns less rssi measurements than requested
  */
 static PHYSEC_RssiMsrmts *
-initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
+initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint8_t nb_measure)
 {
-    PHYSEC_RssiMsrmts *m = calloc(1, sizeof(PHYSEC_RssiMsrmts));
+    PHYSEC_RssiMsrmts *m = malloc(sizeof(PHYSEC_RssiMsrmts));
     if (!m)
         return m;
 
@@ -2490,6 +2714,10 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
         return NULL;
     }
 
+    // sample success indicator
+    uint8_t ssi[nb_measure];
+    memset(ssi, 0, sizeof(ssi));
+
     // change to PHYSEC KeyGen frequency
     lora_cmd_data_t cmd_data;
     uint32_t freq = lora->frequency;
@@ -2499,44 +2727,42 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
     lora_send_cmd (&cmd_data);
 
     sync->cnt = 0;
-    for (uint16_t i=0; i<nb_measure; i++)
+    uint8_t n_measured = 0;
+    for (uint8_t i=0; i<nb_measure; i++)
     {
-        uint8_t buf[PHYSEC_DEV_ID_LEN + 1] = { 0 };
-        memcpy(buf, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
-        buf[PHYSEC_DEV_ID_LEN] = sync->cnt;
 
-        if ( lora_send(buf, sizeof(buf), -1) != sizeof(buf) )
+        // send probe req
+        PHYSEC_probe probe = { .cnt = sync->cnt };
+        memcpy(&(probe.id), sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+        if ( lora_send((uint8_t*)&probe, sizeof(probe), -1) != sizeof(probe) )
             return (void*) -1;
 
-        uint32_t start = mp_hal_ticks_ms();
-        uint8_t received = 0;
-        do
-        {
-            memset(buf, 0, PHYSEC_DEV_ID_LEN);
-            int32_t port = 1;
-            int32_t size = lora_recv(buf, sizeof(buf), PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start), NULL);
-            if (size == sizeof(buf))
-            {
 #if PHYSEC_DEBUG
-                printf("Pkt received ! Check if its the probe req we waiting for\n");
-                hexdump(buf, sizeof(buf));
+        printf(">>> PROBE SENT\n");
+        hexdump((uint8_t*)&probe, sizeof(probe));
+        printf("\n");
 #endif
-                // check if its our probe response
-                if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && *(uint8_t*) (buf+PHYSEC_DEV_ID_LEN) == (sync->cnt+1))
-                {
-                    m->rssi_msrmts[i] = abs(lora->rssi); // contains the rssi of the last received lora pkt
-                    received = 1;
-                }
-            }
-        } while( !received && mp_hal_ticks_ms()-start < PHYSEC_PROBE_TIMEOUT );
+        // wait probe ans
+        if (wait_probe(sync->dev_id, sync->cnt, &(m->rssi_msrmts[i]), NULL, false))
+        {
+            ssi[i] = 1;
+            n_measured ++;
+        }
 
         // the rssi array is already set to 0 due to calloc, this code is useless and only here for verbosity (dont uncomment)
         //if (!received)
         //    m->rssi_msrmts[i] = 0;      // indicate no measure done
 
-        sync->cnt += 2;
+        sync->cnt++;
     }
     m->rssi_msrmts_delay = 0;
+
+    if (!probe_reconciliate(m, sync, ssi, PHYSEC_PROBE_REC_TIMEOUT, false))
+    {
+        free(m->rssi_msrmts);
+        free(m);
+        return  (void*) -1;
+    }
 
     cmd_data.info.init.frequency = freq;
     lora_send_cmd (&cmd_data);
@@ -2553,21 +2779,27 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
  * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller),
  *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we
  *          could just reinitiate the measure, but for now it is safer)
+ *
+ * \warning This implementation could returns less rssi measurements than requested
  */
 static PHYSEC_RssiMsrmts *
-wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
+wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint8_t nb_measure)
 {
-    PHYSEC_RssiMsrmts *m = calloc(1, sizeof(PHYSEC_RssiMsrmts));
+    PHYSEC_RssiMsrmts *m = malloc(sizeof(PHYSEC_RssiMsrmts));
     if (!m)
         return m;
 
     m->nb_msrmts = nb_measure;
-    m->rssi_msrmts = calloc(nb_measure, sizeof(int8_t));
+    m->rssi_msrmts = malloc(nb_measure * sizeof(int8_t));
     if (!m->rssi_msrmts)
     {
         free(m);
         return NULL;
     }
+
+    // sample success indicator
+    uint8_t ssi[nb_measure];
+    memset(ssi, 0, sizeof(ssi));
 
     // change to PHYSEC KeyGen frequency
     lora_cmd_data_t cmd_data;
@@ -2578,52 +2810,48 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint16_t nb_measure)
     lora_send_cmd (&cmd_data);
 
     uint32_t sum_delay = 0;
-    uint32_t start = 0;
+    uint8_t n_measured = 0;
     sync->cnt = 0;
-    for (uint16_t i=0; i<nb_measure; i++)
+    for (uint8_t i=0; i<nb_measure; i++)
     {
-        uint8_t buf[PHYSEC_DEV_ID_LEN + 1] = { 0 };
-        uint32_t now = 0;
-        uint8_t received = 0;
-        do
+        uint32_t duration;
+        uint32_t start;
+        // wait probe req
+        if (wait_probe(sync->dev_id, sync->cnt, &(m->rssi_msrmts[i]), &start, i == 0))
         {
-            memset(buf, 0, sizeof(buf));
-            int32_t size = lora_recv(buf, sizeof(buf), PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start), NULL);
-            if (size == sizeof(buf))
-            {
-#if PHYSEC_DEBUG
-                printf("Pkt received ! Check if its the probe req we waiting for\n");
-                hexdump(buf, sizeof(buf));
-#endif
-                // check if its our probe response
-                if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0 && buf[PHYSEC_DEV_ID_LEN] == sync->cnt)
-                {
-
-                    m->rssi_msrmts[i] = abs(lora->rssi);
-                    received = 1;
-                }
-            }
-            now = mp_hal_ticks_ms()-start;
-        } while( !received && (i == 0 || now < PHYSEC_PROBE_TIMEOUT) );
-        if (i != 0)     // doesn't take care about the first waiting time which is not scaled on PHYSEC_PROBE_TIMEOUT
-            sum_delay += now;
-
-        sync->cnt++ ;
-        memcpy(buf, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
-        buf[PHYSEC_DEV_ID_LEN] = sync->cnt;
-
-        uint16_t timeout = PHYSEC_PROBE_TIMEOUT-(mp_hal_ticks_ms()-start);
-        if (timeout > 0)
-        {
-            if ( lora_send(buf, sizeof(buf), timeout ) != sizeof(buf) )
-                return (void*) -1;
+            ssi[i] = 1;
+            n_measured ++;
         }
 
+        PHYSEC_probe probe = {
+            .cnt = sync->cnt
+        };
+        memcpy(&(probe.id), sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+
+        if (i != 0 && ssi[i])     // doesn't take care about the first waiting time which is not scaled on PHYSEC_PROBE_TIMEOUT
+            sum_delay += (mp_hal_ticks_ms()-start + toa(lora_obj.sf));
+
+        if ( lora_send((uint8_t*) &probe, sizeof(probe), 0 ) != sizeof(probe) )
+            return (void*) -1;
+
+
+#if PHYSEC_DEBUG
+        printf(">>> PROBE SENT\n");
+        hexdump((uint8_t*)&probe, sizeof(probe));
+        printf("\n");
+#endif
+
         sync->cnt++;
-        start = mp_hal_ticks_ms();
     }
 
-    m->rssi_msrmts_delay = (((float)(sum_delay / nb_measure) / 2) / PHYSEC_PROBE_TIMEOUT);
+    m->rssi_msrmts_delay = ((float)(sum_delay / m->nb_msrmts) / (PHYSEC_PROBE_TIMEOUT+toa(lora_obj.sf)));
+
+    if (!probe_reconciliate(m, sync, ssi, PHYSEC_PROBE_REC_TIMEOUT, true))
+    {
+        free(m->rssi_msrmts);
+        free(m);
+        return  (void*) -1;
+    }
 
     cmd_data.info.init.frequency = freq;
     lora_send_cmd (&cmd_data);
@@ -2652,7 +2880,7 @@ lora_initiate_rssi_measure_driver (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t
 
     uint16_t nb_measure = (uint16_t) mp_obj_get_int(nb_measure_obj);
 
-    // mesure an returns data
+    // mesure and returns data
     PHYSEC_RssiMsrmts *rssis = Radio.InitiateRssiMeasure(&sync, nb_measure);
     if (rssis == NULL)
         return mp_const_none;   // alloc failed
@@ -2745,7 +2973,7 @@ lora_initiate_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_mea
         return mp_const_none;   // alloc failed
 
     if (rssis == (void*) -1)
-        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Cannot achieve to performs rssi measurements"));
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "Cannot achieve to performs rssi measurements"));
 
     mp_obj_t rssis_obj[rssis->nb_msrmts];
     for (uint16_t i=0; i<rssis->nb_msrmts; i++)
@@ -2788,7 +3016,7 @@ lora_wait_rssi_measure (mp_obj_t self_in, mp_obj_t sync_obj, mp_obj_t nb_measure
         return mp_const_none;   // alloc failed
 
     if (rssis == (void*) -1)
-        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "[SX1272 Driver] Cannot achieve to performs rssi measurements"));
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "Cannot achieve to performs rssi measurements"));
 
     mp_obj_t rssis_obj[rssis->nb_msrmts];
     for (uint16_t i=0; i<rssis->nb_msrmts; i++)
@@ -2894,6 +3122,10 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     { MP_OBJ_NEW_QSTR(MP_QSTR_CN470),               MP_OBJ_NEW_SMALL_INT(LORAMAC_REGION_CN470) },
     { MP_OBJ_NEW_QSTR(MP_QSTR_IN865),               MP_OBJ_NEW_SMALL_INT(LORAMAC_REGION_IN865) },
     { MP_OBJ_NEW_QSTR(MP_QSTR_EU433),               MP_OBJ_NEW_SMALL_INT(LORAMAC_REGION_EU433) },
+
+    { MP_OBJ_NEW_QSTR(MP_QSTR_PHYSEC_PROBE_TIMEOUT),    MP_OBJ_NEW_SMALL_INT(PHYSEC_PROBE_TIMEOUT) },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_PHYSEC_KEYGEN_FREQUENCY), MP_OBJ_NEW_SMALL_INT(PHYSEC_KEYGEN_FREQUENCY) },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_PHYSEC_DEV_ID_LEN),       MP_OBJ_NEW_SMALL_INT(PHYSEC_DEV_ID_LEN) }
 };
 
 STATIC MP_DEFINE_CONST_DICT(lora_locals_dict, lora_locals_dict_table);

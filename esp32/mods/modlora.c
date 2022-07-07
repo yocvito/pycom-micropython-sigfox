@@ -2503,14 +2503,14 @@ toa(uint8_t sf)
 }
 
 /**
- * \brief 
- * 
- * \param id 
- * \param probe_cnt 
- * \param timeout 
- * \param rssi 
- * \param start 
- * \return true probe has been received, rssi contains pkt rssi and the time contains 
+ * \brief
+ *
+ * \param id
+ * \param probe_cnt
+ * \param timeout
+ * \param rssi
+ * \param start
+ * \return true probe has been received, rssi contains pkt rssi and the time contains
  * \return false probe hasn't been received
  */
 static bool
@@ -2542,7 +2542,7 @@ wait_probe(const uint8_t *id, const uint8_t probe_cnt, int8_t *rssi, uint32_t *d
                 received = true;
             }
         }
-        
+
     } while( !received && (first_no_timeout || mp_hal_ticks_ms()-start < PHYSEC_PROBE_TIMEOUT) );
     return received;
 }
@@ -2589,7 +2589,7 @@ probe_reconciliate(PHYSEC_RssiMsrmts *m, const PHYSEC_Sync *sync, const uint8_t 
     // were able to do on both side
     while (timeout > 0 && !reconciliated)
     {
-        if (!waiter) 
+        if (!waiter)
         {
             PHYSEC_reconcil_probe probe = { 0 };
             memcpy(&(probe.id), sync->dev_id, PHYSEC_DEV_ID_LEN);
@@ -2622,14 +2622,14 @@ probe_reconciliate(PHYSEC_RssiMsrmts *m, const PHYSEC_Sync *sync, const uint8_t 
 #endif
                 uint8_t final_m_nb = probe_ans->payload.ans.new_len;
                 // payload doesn't carry intersection of measurements if we achieved
-                // to measure all probes on both side 
+                // to measure all probes on both side
                 if (final_m_nb < m->nb_msrmts)
                 {
                     int8_t *final_rssi_arr  = select_inter_measures(m, probe_ans->payload.ans.ssi, probe_ans->payload.ans.new_len);
                     m->nb_msrmts = final_m_nb;
                     free(m->rssi_msrmts);
                     m->rssi_msrmts = final_rssi_arr;
-                } 
+                }
                 reconciliated = true;
             }
         }
@@ -2660,7 +2660,7 @@ probe_reconciliate(PHYSEC_RssiMsrmts *m, const PHYSEC_Sync *sync, const uint8_t 
                 memcpy(&(probe_ans.id), sync->dev_id, PHYSEC_DEV_ID_LEN);
                 probe_ans.payload.ans.new_len = final_m_nb;
                 memcpy(&(probe_ans.payload.ans.ssi), inter, m->nb_msrmts);
-                
+
                 memset(buf, 0, sizeof(buf));
                 memcpy(buf, &probe_ans, sizeof(PHYSEC_reconcil_probe));
                 lora_send(buf, pkt_len, -1);
@@ -2676,7 +2676,7 @@ probe_reconciliate(PHYSEC_RssiMsrmts *m, const PHYSEC_Sync *sync, const uint8_t 
                     m->nb_msrmts = final_m_nb;
                     free(m->rssi_msrmts);
                     m->rssi_msrmts = final_rssi_arr;
-                } 
+                }
 
                 reconciliated = true;
             }
@@ -2779,7 +2779,7 @@ initiate_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint8_t nb_measure)
  * \returns A PHYSEC_RssiMsrmts struct pointer if everything goes well (memory need to be freed by caller),
  *          NULL if some allocation failed, or (void*) -1 if something probe sending failed (indeed we
  *          could just reinitiate the measure, but for now it is safer)
- * 
+ *
  * \warning This implementation could returns less rssi measurements than requested
  */
 static PHYSEC_RssiMsrmts *
@@ -2817,7 +2817,7 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint8_t nb_measure)
         uint32_t duration;
         uint32_t start;
         // wait probe req
-        if (wait_probe(sync->dev_id, sync->cnt, &(m->rssi_msrmts[i]), &start, i == 0)) 
+        if (wait_probe(sync->dev_id, sync->cnt, &(m->rssi_msrmts[i]), &start, i == 0))
         {
             ssi[i] = 1;
             n_measured ++;
@@ -2833,8 +2833,8 @@ wait_rssi_measure(lora_obj_t *lora, PHYSEC_Sync *sync, uint8_t nb_measure)
 
         if ( lora_send((uint8_t*) &probe, sizeof(probe), 0 ) != sizeof(probe) )
             return (void*) -1;
-        
-        
+
+
 #if PHYSEC_DEBUG
         printf(">>> PROBE SENT\n");
         hexdump((uint8_t*)&probe, sizeof(probe));
@@ -3036,36 +3036,7 @@ STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
 
-    int8_t rssi_tmp[] = {48, 76, 98, 84, 56, 64, 72, 82, 98, 102};
-
-    PHYSEC_RssiMsrmts M;
-    M.nb_msrmts = 10;
-    M.rssi_msrmts = rssi_tmp;
-    M.rssi_msrmts_delay = 12;
-
-    printf("rssi original :");
-    for(int i = 0; i < M.nb_msrmts; i++){
-        printf(" %d", M.rssi_msrmts[i]);
-
-    }
-    printf("\n");
-
-    PHYSEC_RssiMsrmts M_filtered = PHYSEC_golay_filter(M);
-    printf("rssi filtered :");
-    for(int i = 0; i < M_filtered.nb_msrmts; i++){
-        printf(" %d", M_filtered.rssi_msrmts[i]);
-    }
-    printf("\n");
-
-    PHYSEC_RssiMsrmts M_estimated = PHYSEC_interpolation(M_filtered);
-    printf("rssi estimated :");
-    for(int i = 0; i < M_estimated.nb_msrmts; i++){
-        printf(" %d", M_estimated.rssi_msrmts[i]);
-    }
-    printf("\n");
-
-    free(M_estimated.rssi_msrmts);
-    free(M_filtered.rssi_msrmts);
+    PHYSEC_signal_processing_test();
 
     printf("---------- < PHYSEC sandbox < -----------\n");
 

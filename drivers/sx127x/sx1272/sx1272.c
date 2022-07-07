@@ -1735,47 +1735,115 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct density d){
 }
 
 /*
+    return value:
+        level index strating from 1.
+        0 : in case of error
+*/
+unsigned char PHYSEC_quntification_get_level(
+    int8_t rssi,
+    int8_t *threshold_starts,
+    int8_t *threshold_ends,
+    int8_t qunatification_level_nbr
+){
+    unsigned char level = 1;
+    for(int i = 0; i<qunatification_level_nbr; i++){
+        if(rssi<threshold_starts[i])
+            return 0;
+        if(rssi<=threshold_ends[i])
+            return level;
+        level++;
+    }
+    return 0;
+}
+
+/*
     Return value :
         number of generated bit (from left)
 */
-int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output){
+int PHYSEC_quntification(
+    PHYSEC_RssiMsrmts rssi_msermts,
+    double data_to_band_ration,
+    char *key_output
+){
 
-    uint8_t nbr_of_bit_generated = 0;
+    uint8_t nbr_of_generated_bits_by_char = 0, key_char_index = 0;
     uint8_t nbr_of_processed_windows = 0;
     uint16_t rssi_window_align_index = 0;
     int8_t *rssi_window;
     int8_t qunatification_level_nbr;
+    struct density density;
 
 
     // filtering
     PHYSEC_RssiMsrmts rssi_msermts_filtered = PHYSEC_golay_filter(rssi_msermts);
-    free(rssi_msermts.rssi_msrmts);
 
     // same time measure estimation
     PHYSEC_RssiMsrmts rssi_msermts_estimated = PHYSEC_interpolation(rssi_msermts_filtered);
     free(rssi_msermts_filtered.rssi_msrmts);
     rssi_msermts.rssi_msrmts = rssi_msermts_estimated.rssi_msrmts;
 
+    // preaparing for key generation
+    memset(key_output, 0, 16*sizeof(char));
+    unsigned char level;
+    int8_t rest_bits;
+    uint8_t gen_bits;
+
     while(rssi_window_align_index  < rssi_msermts.nb_msrmts){
 
+        // rssi window
         rssi_window = rssi_msermts.rssi_msrmts+rssi_window_align_index;
 
-        // // computing hist
-        // hist = PHYSEC_quntification_compute_hist(rssi_window);
+        // computing density
+        density = PHYSEC_quntification_get_density(rssi_window);
 
-        // // computing level number
-        // qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(hist);
+        // computing level number
+        qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(density);
 
-        // int8_t thresholds[qunatification_level_nbr+1];
-        // int8_t band[qunatification_level_nbr-1];
+        // computing thresholds
+        int8_t threshold_starts[qunatification_level_nbr];
+        int8_t threshold_ends[qunatification_level_nbr];
+        double cdf = 0;
+        for(int i = 0; i<qunatification_level_nbr; i++){
+            threshold_starts[i] = PHYSEC_quntification_inverse_cdf(cdf, density);
+            cdf+=(1-data_to_band_ration)/qunatification_level_nbr;
+            threshold_ends[i] = PHYSEC_quntification_inverse_cdf(cdf, density);
+            cdf+=data_to_band_ration/(qunatification_level_nbr-1);
+        }
 
+        // quantification
+        gen_bits = (uint8_t) log2(qunatification_level_nbr);
+        for(int i = 0; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+            level = PHYSEC_quntification_get_level(
+                rssi_window[i],
+                threshold_starts,
+                threshold_ends,
+                qunatification_level_nbr
+            );
+            if(level > 0){
+                level--;
+                rest_bits = gen_bits - (8-nbr_of_generated_bits_by_char);
+                if(rest_bits>0){
+                    key_output[key_char_index] += level>>rest_bits;
+                    key_char_index++;
+                    if(key_char_index==16){
+                        return 128;
+                    }
+                    key_output[key_char_index] += level<<(8+gen_bits-rest_bits);
+                    nbr_of_generated_bits_by_char = rest_bits;
+                }else{
+                    key_output[key_char_index] += level<<(8-nbr_of_generated_bits_by_char-gen_bits);
+                    nbr_of_generated_bits_by_char += gen_bits;
+                }
+                
+            }
+        }
 
 
         nbr_of_processed_windows++;
         rssi_window_align_index = (uint16_t)(nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN);
     }
 
-    return nbr_of_bit_generated;
+    return 8*key_char_index+nbr_of_generated_bits_by_char;
 
 }
 
@@ -1826,6 +1894,25 @@ void PHYSEC_signal_processing_test(){
 
     int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(density);
     printf("Quantification level number : %d\n", qunatification_level_nbr);
+
+    // quantification test
+    int8_t rssi_tmp2[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86, 96, 47, 58, 74, 87, 92, 66, 84, 53, 61, 72, 83, 81, 64, 55, 47, 85, 95, 77, 98, 102, 85, 97, 45, 57, 78, 85, 93, 47, 58, 74, 87, 92, 66, 84, 53, 64, 85, 52, 64, 76, 88, 81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
+
+    PHYSEC_RssiMsrmts M2;
+    M2.nb_msrmts = 62;
+    M2.rssi_msrmts = rssi_tmp2;
+    M2.rssi_msrmts_delay = 12;
+
+    char generated_key[16];
+    int generated_key_len = PHYSEC_quntification(M2, 0.1, generated_key);
+
+    printf("Qunatification :\n");
+    printf("\tkey len : %d bits\n", generated_key_len);
+    printf("\tkey = [");
+    for(int i = 0; i < 16; i++){
+        printf("%d ", generated_key[i]);
+    }
+    printf("]\n");
 
     PHYSEC_quntification_free_density(density);
     free(M_estimated.rssi_msrmts);

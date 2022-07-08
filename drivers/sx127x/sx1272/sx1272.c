@@ -1847,6 +1847,8 @@ int PHYSEC_quntification(
 
 }
 
+#ifdef PHYSEC_DEBUG
+
 void PHYSEC_signal_processing_test(){
 
     int8_t rssi_tmp[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
@@ -1919,5 +1921,6 @@ void PHYSEC_signal_processing_test(){
     free(M_filtered.rssi_msrmts);
 
 }
+#endif //PHYSEC_DEBUG
 
 #endif // PHYSEC

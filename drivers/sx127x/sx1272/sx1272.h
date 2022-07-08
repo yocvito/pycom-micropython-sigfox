@@ -427,6 +427,8 @@ int PHYSEC_quntification(
     char *key_output
 );
 
+#ifdef PHYSEC_DEBUG
 void PHYSEC_signal_processing_test();
+#endif
 
 #endif // __SX1272_H__

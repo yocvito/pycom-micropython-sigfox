@@ -128,6 +128,10 @@
 typedef enum {
     E_LORA_STACK_MODE_LORA = 0,
     E_LORA_STACK_MODE_LORAWAN
+    #ifdef PHYSEC
+    ,
+    E_LORA_STACK_MODE_LORAPHYSEC
+    #endif
 } lora_stack_mode_t;
 
 typedef enum {
@@ -1327,9 +1331,19 @@ static void lora_radio_setup (lora_init_cmd_data_t *init_data) {
 }
 
 static void lora_validate_mode (uint32_t mode) {
+    #ifdef PHYSEC
+    if (mode > E_LORA_STACK_MODE_LORAPHYSEC) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "invalid mode %d", mode));
+    }else{
+        if(mode == E_LORA_STACK_MODE_LORAPHYSEC){
+            printf("lora mode : LORAPHYSEC\n");
+        }
+    }
+    #else
     if (mode > E_LORA_STACK_MODE_LORAWAN) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "invalid mode %d", mode));
     }
+    #endif
 }
 
 static void lora_validate_frequency (uint32_t frequency) {
@@ -3036,7 +3050,7 @@ STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
 
-    PHYSEC_signal_processing_test();
+    
 
     printf("---------- < PHYSEC sandbox < -----------\n");
 
@@ -3091,6 +3105,9 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     // class constants
     { MP_OBJ_NEW_QSTR(MP_QSTR_LORA),                MP_OBJ_NEW_SMALL_INT(E_LORA_STACK_MODE_LORA) },
     { MP_OBJ_NEW_QSTR(MP_QSTR_LORAWAN),             MP_OBJ_NEW_SMALL_INT(E_LORA_STACK_MODE_LORAWAN) },
+    #ifdef PHYSEC
+    { MP_OBJ_NEW_QSTR(MP_QSTR_LORAPHYSEC),          MP_OBJ_NEW_SMALL_INT(E_LORA_STACK_MODE_LORAPHYSEC) },
+    #endif
 
     { MP_OBJ_NEW_QSTR(MP_QSTR_OTAA),                MP_OBJ_NEW_SMALL_INT(E_LORA_ACTIVATION_OTAA) },
     { MP_OBJ_NEW_QSTR(MP_QSTR_ABP),                 MP_OBJ_NEW_SMALL_INT(E_LORA_ACTIVATION_ABP) },
@@ -3215,19 +3232,38 @@ static int lora_socket_send (mod_network_socket_obj_t *s, const byte *buf, mp_ui
     } else if (len > LORA_PAYLOAD_SIZE_MAX) {
         *_errno = MP_EMSGSIZE;
     } else if (len > 0) {
-        if (lora_obj.stack_mode == E_LORA_STACK_MODE_LORA) {
-            n_bytes = lora_send (buf, len, s->sock_base.timeout);
-        } else {
-            if (lora_obj.joined) {
-                n_bytes = lorawan_send (buf, len, s->sock_base.timeout,
-                                        LORAWAN_SOCKET_IS_CONFIRMED(s->sock_base.u.sd),
-                                        LORAWAN_SOCKET_GET_DR(s->sock_base.u.sd),
-                                        LORAWAN_SOCKET_GET_PORT(s->sock_base.u.sd));
-            } else {
-                *_errno = MP_ENETDOWN;
-                return -1;
-            }
+
+        switch(lora_obj.stack_mode){
+
+            case E_LORA_STACK_MODE_LORA:
+                n_bytes = lora_send (buf, len, s->sock_base.timeout);
+                break;
+            
+            case E_LORA_STACK_MODE_LORAWAN:
+                if (lora_obj.joined) {
+                    n_bytes = lorawan_send (buf, len, s->sock_base.timeout,
+                                            LORAWAN_SOCKET_IS_CONFIRMED(s->sock_base.u.sd),
+                                            LORAWAN_SOCKET_GET_DR(s->sock_base.u.sd),
+                                            LORAWAN_SOCKET_GET_PORT(s->sock_base.u.sd));
+                } else {
+                    *_errno = MP_ENETDOWN;
+                    return -1;
+                }
+                break;
+            
+            #ifdef PHYSEC
+            case E_LORA_STACK_MODE_LORAPHYSEC:
+                printf("lora_socket_send using LORAPHYSEC protocol.\n");
+                n_bytes = lora_send (buf, len, s->sock_base.timeout);
+                break;
+            #endif
+            
+            default :   
+                nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, " lora_socket_send : invalid mode %d", lora_obj.stack_mode));
+                break;
+            
         }
+
         if (n_bytes == 0) {
             *_errno = MP_EAGAIN;
             n_bytes = -1;

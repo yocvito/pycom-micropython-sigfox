@@ -414,16 +414,4 @@ void SX1272SetPublicNetwork( bool enable );
  */
 void SX1272Reset( void );
 
-PHYSEC_RssiMsrmts *SX1272InitiateRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures);
-
-PHYSEC_RssiMsrmts *SX1272WaitRssiMeasure(PHYSEC_Sync *sync, const uint16_t nb_measures);
-
-PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts);
-PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts);
-
-
-int PHYSEC_quntification(PHYSEC_RssiMsrmts rssi_msermts, char *key_output);
-
-void PHYSEC_signal_processing_test();
-
 #endif // __SX1272_H__

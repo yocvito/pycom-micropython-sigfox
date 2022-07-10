@@ -20,40 +20,6 @@ Maintainer: Miguel Luis and Gregory Cristian
 #define RADIO_IRQ_FLAG_RX_ERROR                     ( 0x04 )
 
 /*!
- * PHYSEC interface
- */
-
-// Device ID length for KEY GENERATION
-#define PHYSEC_DEV_ID_LEN           6
-#define PHYSEC_KEYGEN_FREQUENCY     867900000
-#define PHYSEC_PROBE_TIMEOUT        500         // 500 ms
-#define PHYSEC_SYNC_WORD            0x67
-#define PHYSEC_PROBE_REC_TIMEOUT    5000
-#define PHYSEC_N_MAX_MEASURE        255
-
-/*!
- * Structure to stores the rssi measurments extracted from transceiver
- * during key generation procedure
- * rssi_msrmts_delay :
- *  a float between 0 and 1
- *  = 0 in case of initiating measurments
- */
-typedef struct _PHYSEC_RssiMsrmts {
-    uint8_t nb_msrmts;
-    int8_t *rssi_msrmts;
-    float rssi_msrmts_delay;
-} PHYSEC_RssiMsrmts;
-
-/*!
- * Structure to synchronize devices during key generation
- */
-typedef struct _PHYSEC_Sync {
-    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t rmt_dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t cnt;
-} PHYSEC_Sync;
-
-/*!
  * Radio driver supported modems
  */
 typedef enum
@@ -374,16 +340,6 @@ struct Radio_s
      * \brief Manually resets Lora chip.
      */
     void    ( *Reset )( void );
-#ifdef PHYSEC
-    /*!
-     * \brief Get rssi measurements from a specified device id (this is the initiator function)
-     */
-    PHYSEC_RssiMsrmts* (*InitiateRssiMeasure)(PHYSEC_Sync *sync, const uint16_t nb_measure);
-    /*!
-     * \brief Get rssi measurements from a specified device id (this is the listenner function)
-     */
-    PHYSEC_RssiMsrmts* (*WaitRssiMeasure)(PHYSEC_Sync *sync, const uint16_t nb_measure);
-#endif
 };
 
 /*!

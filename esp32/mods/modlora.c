@@ -2859,11 +2859,12 @@ unsigned char PHYSEC_quntification_get_level(
 /*
     Return value :
         number of generated bit (from left)
+        key_output = 128 bits = 16 bytes = a 16-uint8_t-table.
 */
 int PHYSEC_quntification(
     PHYSEC_RssiMsrmts *rssi_msermts,
     double data_to_band_ration,
-    char *key_output
+    uint8_t *key_output
 ){
 
     uint8_t nbr_of_generated_bits_by_char = 0, key_char_index = 0;
@@ -2881,7 +2882,7 @@ int PHYSEC_quntification(
     PHYSEC_interpolation(rssi_msermts);
 
     // preaparing for key generation
-    memset(key_output, 0, 16*sizeof(char));
+    memset(key_output, 0, 16*sizeof(uint8_t));
     unsigned char level;
     int8_t rest_bits;
     uint8_t gen_bits;
@@ -3003,7 +3004,7 @@ void PHYSEC_signal_processing_test(){
     M2.rssi_msrmts = rssi_tmp2;
     M2.rssi_msrmts_delay = 12;
 
-    char generated_key[16];
+    uint8_t generated_key[16];
     int generated_key_len = PHYSEC_quntification(&M2, 0.1, generated_key);
 
     printf("Qunatification :\n");
@@ -3159,7 +3160,7 @@ initiate_key_agg(PHYSEC_Key *k, PHYSEC_Sync *sync)
             .rssi_msrmts_delay = 0
         };
         PHYSEC_Key P = { 0 };
-        PHYSEC_quntification(&m, 0.1, (char*) &(P.key));
+        PHYSEC_quntification(&m, 0.1, (uint8_t*) &(P.key));
 
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
 

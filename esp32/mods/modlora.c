@@ -2785,31 +2785,31 @@ struct density PHYSEC_quntification_get_density(int8_t *rssi_window){
 
 }
 
-void PHYSEC_quntification_free_density(struct density d){
-    free(d.bins);
-    free(d.values);
+void PHYSEC_quntification_free_density(struct density *d){
+    free(d->bins);
+    free(d->values);
 }
 
 /*
     CDF : cumulative distribution function
 */
-int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density d){
+int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
 
     if(cdf < 0 || cdf > 1){
         fprintf(stderr, "PHYSEC_quntification_inverse_density : cdf isn't between 0 and 1.\n");
         return -1;
     }
 
-    int8_t q = d.q_0, q_rest;
+    int8_t q = d->q_0, q_rest;
     double integ = 0, current_integ;
 
-    for(int i = 0; i < d.bin_nbr; i++){
-        current_integ = d.bins[i]*d.values[i];
+    for(int i = 0; i < d->bin_nbr; i++){
+        current_integ = d->bins[i]*d->values[i];
         if(cdf < integ+current_integ){
-            q_rest = (int8_t) ((cdf - integ)/d.values[i]);
+            q_rest = (int8_t) ((cdf - integ)/d->values[i]);
             return q + q_rest;
         }else{
-            q += d.bins[i];
+            q += d->bins[i];
             integ += current_integ;
         }
     }
@@ -2820,14 +2820,14 @@ int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density d){
 // <--- Density function estimation
 
 
-int8_t PHYSEC_quntification_compute_level_nbr(struct density d){
+int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
 
     double entropy = 0;
     double proba;
     int8_t nbr_bit;
 
-    for(int i = 0; i < d.bin_nbr; i++){
-        proba = d.values[i] * d.bins[i];
+    for(int i = 0; i < d->bin_nbr; i++){
+        proba = d->values[i] * d->bins[i];
         if(proba>0){
             entropy +=  proba*log2(proba);
         }
@@ -2901,16 +2901,16 @@ int PHYSEC_quntification(
         density = PHYSEC_quntification_get_density(rssi_window);
 
         // computing level number
-        qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(density);
+        qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(&density);
 
         // computing thresholds
         int8_t threshold_starts[qunatification_level_nbr];
         int8_t threshold_ends[qunatification_level_nbr];
         double cdf = 0;
         for(int i = 0; i<qunatification_level_nbr; i++){
-            threshold_starts[i] = PHYSEC_quntification_inverse_cdf(cdf, density);
+            threshold_starts[i] = PHYSEC_quntification_inverse_cdf(cdf, &density);
             cdf+=(1-data_to_band_ration)/qunatification_level_nbr;
-            threshold_ends[i] = PHYSEC_quntification_inverse_cdf(cdf, density);
+            threshold_ends[i] = PHYSEC_quntification_inverse_cdf(cdf, &density);
             cdf+=data_to_band_ration/(qunatification_level_nbr-1);
         }
 
@@ -2998,7 +2998,7 @@ void PHYSEC_signal_processing_test(){
     }
     printf("]\n");
 
-    int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(density);
+    int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(&density);
     printf("Quantification level number : %d\n", qunatification_level_nbr);
 
     // quantification test
@@ -3020,13 +3020,20 @@ void PHYSEC_signal_processing_test(){
     }
     printf("]\n");
 
-    PHYSEC_quntification_free_density(density);
+    PHYSEC_quntification_free_density(&density);
     free(M_estimated.rssi_msrmts);
     free(M_filtered.rssi_msrmts);
 
 }
 
 #endif
+// END : Key generation
+
+// Key gen Policy
+
+
+
+// END : Key gen Policy
 
 static inline uint16_t
 toa(uint8_t sf)

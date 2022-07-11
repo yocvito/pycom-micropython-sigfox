@@ -2632,62 +2632,58 @@ struct density {
 
 // --- Filtering
 
-PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts){
+void PHYSEC_golay_filter(PHYSEC_RssiMsrmts *rssi_msermts){
 
     int8_t coef[] = {-3, 12, 17, 12, -3};
     float normalization;
 
     int rssi_tmp; // it is not normalisze so int8_t is not a valid type.
 
-    PHYSEC_RssiMsrmts rssi_msermts_filterd;
-    rssi_msermts_filterd.nb_msrmts = rssi_msermts.nb_msrmts;
-    rssi_msermts_filterd.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
+    int8_t filtred_rssi_msrmts[rssi_msermts->nb_msrmts];
 
-    for(int i_rssi = 0; i_rssi < rssi_msermts.nb_msrmts; i_rssi++){
+    for(int i_rssi = 0; i_rssi < rssi_msermts->nb_msrmts; i_rssi++){
 
         normalization = 0;
         rssi_tmp = 0;
 
         for(int i_coef = -2; i_coef < 3; i_coef++){
-            if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts.nb_msrmts){
-                rssi_tmp += coef[i_coef+2] * rssi_msermts.rssi_msrmts[i_rssi+i_coef];
+            if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts->nb_msrmts){
+                rssi_tmp += coef[i_coef+2] * rssi_msermts->rssi_msrmts[i_rssi+i_coef];
                 normalization += coef[i_coef+2];
             }
         }
 
-        rssi_msermts_filterd.rssi_msrmts[i_rssi] = (int8_t) ((float)(rssi_tmp)/normalization);
+        filtred_rssi_msrmts[i_rssi] = (int8_t) ((float)(rssi_tmp)/normalization);
 
     }
 
-    return rssi_msermts_filterd;
+    memcpy(rssi_msermts->rssi_msrmts, filtred_rssi_msrmts, rssi_msermts->nb_msrmts * sizeof(int8_t));
 
 }
 
 // --- Interpolation
 
-PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
+void PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
 
-    PHYSEC_RssiMsrmts rssi_msermts_estimation;
-    rssi_msermts_estimation.nb_msrmts = rssi_msermts.nb_msrmts;
-    rssi_msermts_estimation.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
-    rssi_msermts_estimation.rssi_msrmts_delay = 0;
+    int8_t interpolated_rssi_msrmts[rssi_msermts->nb_msrmts];
 
     int8_t delta_rssi;
     float rssi_err;
 
-    if(rssi_msermts.nb_msrmts > 0 && rssi_msermts.rssi_msrmts_delay > 0){
+    if(rssi_msermts->nb_msrmts > 0 && rssi_msermts->rssi_msrmts_delay > 0){
 
-        rssi_msermts_estimation.rssi_msrmts[0] = rssi_msermts.rssi_msrmts[0];
+        interpolated_rssi_msrmts[0] = rssi_msermts->rssi_msrmts[0];
 
-        for(int i = 1; i < rssi_msermts.nb_msrmts; i++){
-            delta_rssi = rssi_msermts.rssi_msrmts[i] - rssi_msermts.rssi_msrmts[i-1];
-            rssi_err = (rssi_msermts.rssi_msrmts_delay * (float)(delta_rssi));
-            rssi_msermts_estimation.rssi_msrmts[i] = rssi_msermts.rssi_msrmts[i] - rssi_err;
+        for(int i = 1; i < rssi_msermts->nb_msrmts; i++){
+            delta_rssi = rssi_msermts->rssi_msrmts[i] - rssi_msermts->rssi_msrmts[i-1];
+            rssi_err = (rssi_msermts->rssi_msrmts_delay * (float)(delta_rssi));
+            interpolated_rssi_msrmts[i] = rssi_msermts->rssi_msrmts[i] - rssi_err;
         }
 
     }
 
-    return rssi_msermts_estimation;
+    rssi_msermts->rssi_msrmts_delay = 0;
+    memcpy(rssi_msermts->rssi_msrmts, interpolated_rssi_msrmts, rssi_msermts->nb_msrmts*sizeof(int8_t));
 
 }
 
@@ -2865,7 +2861,7 @@ unsigned char PHYSEC_quntification_get_level(
         number of generated bit (from left)
 */
 int PHYSEC_quntification(
-    PHYSEC_RssiMsrmts rssi_msermts,
+    PHYSEC_RssiMsrmts *rssi_msermts,
     double data_to_band_ration,
     char *key_output
 ){
@@ -2879,12 +2875,10 @@ int PHYSEC_quntification(
 
 
     // filtering
-    PHYSEC_RssiMsrmts rssi_msermts_filtered = PHYSEC_golay_filter(rssi_msermts);
+    PHYSEC_golay_filter(rssi_msermts);
 
     // same time measure estimation
-    PHYSEC_RssiMsrmts rssi_msermts_estimated = PHYSEC_interpolation(rssi_msermts_filtered);
-    free(rssi_msermts_filtered.rssi_msrmts);
-    rssi_msermts.rssi_msrmts = rssi_msermts_estimated.rssi_msrmts;
+    PHYSEC_interpolation(rssi_msermts);
 
     // preaparing for key generation
     memset(key_output, 0, 16*sizeof(char));
@@ -2892,10 +2886,10 @@ int PHYSEC_quntification(
     int8_t rest_bits;
     uint8_t gen_bits;
 
-    while(rssi_window_align_index  < rssi_msermts.nb_msrmts){
+    while(rssi_window_align_index  < rssi_msermts->nb_msrmts){
 
         // rssi window
-        rssi_window = rssi_msermts.rssi_msrmts+rssi_window_align_index;
+        rssi_window = rssi_msermts->rssi_msrmts+rssi_window_align_index;
 
         // computing density
         density = PHYSEC_quntification_get_density(rssi_window);
@@ -2969,22 +2963,22 @@ void PHYSEC_signal_processing_test(){
     }
     printf("\n");
 
-    PHYSEC_RssiMsrmts M_filtered = PHYSEC_golay_filter(M);
+    PHYSEC_golay_filter(&M);
     printf("rssi filtered :");
-    for(int i = 0; i < M_filtered.nb_msrmts; i++){
-        printf(" %d", M_filtered.rssi_msrmts[i]);
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
     }
     printf("\n");
 
-    PHYSEC_RssiMsrmts M_estimated = PHYSEC_interpolation(M_filtered);
+    PHYSEC_interpolation(&M);
     printf("rssi estimated :");
-    for(int i = 0; i < M_estimated.nb_msrmts; i++){
-        printf(" %d", M_estimated.rssi_msrmts[i]);
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
     }
     printf("\n");
 
     printf("density estimation :\n");
-    struct density density = PHYSEC_quntification_get_density(M_estimated.rssi_msrmts);
+    struct density density = PHYSEC_quntification_get_density(M.rssi_msrmts);
     printf("\tq_0 : %d\n", density.q_0);
     printf("\tbin_nbr : %d\n", density.bin_nbr);
     printf("\tbins = [");
@@ -3010,7 +3004,7 @@ void PHYSEC_signal_processing_test(){
     M2.rssi_msrmts_delay = 12;
 
     char generated_key[16];
-    int generated_key_len = PHYSEC_quntification(M2, 0.1, generated_key);
+    int generated_key_len = PHYSEC_quntification(&M2, 0.1, generated_key);
 
     printf("Qunatification :\n");
     printf("\tkey len : %d bits\n", generated_key_len);
@@ -3021,8 +3015,6 @@ void PHYSEC_signal_processing_test(){
     printf("]\n");
 
     PHYSEC_quntification_free_density(&density);
-    free(M_estimated.rssi_msrmts);
-    free(M_filtered.rssi_msrmts);
 
 }
 
@@ -3167,7 +3159,7 @@ initiate_key_agg(PHYSEC_Key *k, PHYSEC_Sync *sync)
             .rssi_msrmts_delay = 0
         };
         PHYSEC_Key P = { 0 };
-        PHYSEC_quntification(m, 0.1, (char*) &(P.key));
+        PHYSEC_quntification(&m, 0.1, (char*) &(P.key));
 
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
 
@@ -3893,7 +3885,7 @@ STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
 
-
+    PHYSEC_signal_processing_test();
 
     printf("---------- < PHYSEC sandbox < -----------\n");
 

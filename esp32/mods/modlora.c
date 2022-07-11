@@ -3027,7 +3027,7 @@ struct peer_key{
     uint32_t peer_id;
     uint8_t key[16];
     struct peer_key *next;
-}
+};
 
 typedef struct peer_key** peer_key_list_t;
 
@@ -3049,8 +3049,8 @@ void peer_key_recursive_free(struct peer_key *pk){
 }
 
 void peer_key_list_free(peer_key_list_t pkl){
-    peer_key_recursive_free(*pkL);
-    *pkL = NULL;
+    peer_key_recursive_free(*pkl);
+    *pkl = NULL;
 }
 
 void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key){
@@ -3071,7 +3071,6 @@ return value:
 */
 char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out){
     
-    struct peer_key *pk_prev = NULL;
     struct peer_key *pk_curr = *pkl;
 
     while(pk_curr != NULL){
@@ -4173,7 +4172,7 @@ static int lora_socket_send (mod_network_socket_obj_t *s, const byte *buf, mp_ui
 
             #ifdef PHYSEC
             case E_LORA_STACK_MODE_LORAPHYSEC:
-                printf("lora_socket_send using LORAPHYSEC protocol.\n");
+                printf("lora_socket_send using LORAPHYSEC protocol. (device_id = %d)\n", lora_obj.physec_device_id);
                 n_bytes = lora_send (buf, len, s->sock_base.timeout);
                 break;
             #endif

@@ -3023,7 +3023,91 @@ void PHYSEC_signal_processing_test(){
 // END : Key generation
 
 // Key gen Policy
+struct peer_key{
+    uint32_t peer_id;
+    uint8_t key[16];
+    struct peer_key *next;
+}
 
+typedef struct peer_key** peer_key_list_t;
+
+void peer_key_list_init(peer_key_list_t pkl){
+    *pkl = NULL;
+}
+
+void peer_key_free(struct peer_key *pk){
+    if(pk != NULL){
+        free(pk);
+    }
+}
+
+void peer_key_recursive_free(struct peer_key *pk){
+    if(pk != NULL){
+        peer_key_recursive_free(pk->next);
+        peer_key_free(pk);
+    }
+}
+
+void peer_key_list_free(peer_key_list_t pkl){
+    peer_key_recursive_free(*pkL);
+    *pkL = NULL;
+}
+
+void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key){
+    
+    struct peer_key *pk = malloc(sizeof(struct peer_key));
+    pk->peer_id = peer_id;
+    memcpy(pk->key, key, 16*sizeof(uint8_t));
+    pk->next = *pkl;
+    
+    *pkl = pk;
+
+}
+
+/*
+return value:
+    -1  : peer_id not found, key_out = NULL.
+    0   : peer_id founded and the key is copied in the key_out.
+*/
+char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out){
+    
+    struct peer_key *pk_prev = NULL;
+    struct peer_key *pk_curr = *pkl;
+
+    while(pk_curr != NULL){
+        if(pk_curr->peer_id == peer_id){
+            memcpy(key_out, pk_curr->key, 16*sizeof(uint8_t));
+            return 0;
+        }
+    }
+
+    return -1;
+    
+}
+
+void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
+    
+    struct peer_key *pk_prev = NULL;
+    struct peer_key *pk_curr = *pkl;
+
+    while(pk_curr != NULL){
+        if(pk_curr->peer_id == peer_id){
+            if(pk_prev == NULL){
+                (*pkl)->next = pk_curr->next;
+                peer_key_free(pk_curr);
+                pk_curr = (*pkl)->next;
+            }else{
+                pk_prev->next = pk_curr->next;
+                peer_key_free(pk_curr);
+                pk_curr = pk_prev->next;
+            }
+        }else{
+            pk_prev = pk_curr;
+            pk_curr = pk_curr->next;
+        }
+    }
+    
+}
 
 
 // END : Key gen Policy

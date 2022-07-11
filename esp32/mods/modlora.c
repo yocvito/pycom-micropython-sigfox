@@ -239,6 +239,11 @@ typedef struct {
     uint8_t           events;
     uint8_t           trigger;
     uint8_t           tx_trials;
+
+    #ifdef PHYSEC
+    uint32_t        physec_device_id;
+    #endif
+
 } lora_obj_t;
 
 typedef struct {
@@ -1829,6 +1834,9 @@ STATIC const mp_arg_t lora_init_args[] = {
     { MP_QSTR_tx_retries,   MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = 2} },
     { MP_QSTR_device_class, MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = CLASS_A} },
     { MP_QSTR_region,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    #ifdef PHYSEC
+    { MP_QSTR_physec_device_id,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    #endif
 };
 STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_uint_t n_kw, const mp_obj_t *all_args) {
     // parse args
@@ -1854,6 +1862,14 @@ STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_ui
         // register it as a network card
         mod_network_register_nic(self);
     }
+
+    #ifdef PHYSEC
+    //set device id
+    self->physec_device_id = (uint32_t) MP_OBJ_SMALL_INT_VALUE(args[16].u_obj);
+    // memcpy(&(self->physec_device_id), &(args[16].u_obj), sizeof(uint32_t));
+    // printf("physec device id = %d\n", MP_OBJ_SMALL_INT_VALUE(args[16].u_obj));
+    // printf("physec device id = %d\n", MP_OBJ_SMALL_INT_VALUE(self->physec_device_id));
+    #endif
 
     return (mp_obj_t)self;
 }
@@ -2200,6 +2216,18 @@ STATIC mp_obj_t lora_sf (mp_uint_t n_args, const mp_obj_t *args) {
     }
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lora_sf_obj, 1, 2, lora_sf);
+
+STATIC mp_obj_t lora_physec_device_id (mp_uint_t n_args, const mp_obj_t *args) {
+    lora_obj_t *self = args[0];
+    if (n_args == 1) {
+        return mp_obj_new_int(self->physec_device_id);
+    } else {
+        // memcpy(&(self->physec_device_id), &(args[1]), sizeof(mp_obj_t));
+        self->physec_device_id = (uint32_t) mp_obj_get_int(args[1]);
+        return mp_const_none;
+    }
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lora_physec_device_id_obj, 1, 2, lora_physec_device_id);
 
 STATIC mp_obj_t lora_power_mode(mp_uint_t n_args, const mp_obj_t *args) {
     lora_obj_t *self = args[0];
@@ -3088,11 +3116,14 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     { MP_OBJ_NEW_QSTR(MP_QSTR_airtime),               (mp_obj_t)&lora_airtime_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_reset),                 (mp_obj_t)&lora_reset_obj },
 #ifdef PHYSEC
-    { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure_ll), (mp_obj_t)&lora_initiate_rssi_measure_driver_obj },
-    { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure_ll),     (mp_obj_t)&lora_wait_rssi_measure_driver_obj },
-    { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure), (mp_obj_t)&lora_initiate_rssi_measure_obj },
-    { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure),     (mp_obj_t)&lora_wait_rssi_measure_obj },
-    { MP_OBJ_NEW_QSTR(MP_QSTR_physec_sandbox),     (mp_obj_t)&lora_physec_sandbox_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure_ll),    (mp_obj_t)&lora_initiate_rssi_measure_driver_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure_ll),        (mp_obj_t)&lora_wait_rssi_measure_driver_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_initiate_rssi_measure),       (mp_obj_t)&lora_initiate_rssi_measure_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_wait_rssi_measure),           (mp_obj_t)&lora_wait_rssi_measure_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_physec_sandbox),              (mp_obj_t)&lora_physec_sandbox_obj },
+
+    { MP_OBJ_NEW_QSTR(MP_QSTR_physec_device_id),            (mp_obj_t)&lora_physec_device_id_obj },
+
 #endif
 
 #ifdef LORA_OPENTHREAD_ENABLED

@@ -66,6 +66,10 @@ typedef enum {
     E_LORA_NVS_NUM_KEYS
 } e_lora_nvs_key_t;
 
+/*
+This struct is used to send mac cmd packet.
+The struct that holds lora attributes is lora_obj_t.
+*/
 typedef struct {
     uint32_t        frequency;
     LoRaMacRegion_t region;

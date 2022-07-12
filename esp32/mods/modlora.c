@@ -178,6 +178,132 @@ typedef enum {
     E_LORA_ACTIVATION_ABP
 } lora_activation_t;
 
+#ifdef PHYSEC
+/*!
+ * PHYSEC interface
+ */
+
+/*!
+ * PHYSEC defines
+ */
+
+// Device ID length for KEY GENERATION
+#define PHYSEC_KEYGEN_FREQUENCY     867900000
+#define PHYSEC_PROBE_TIMEOUT        500         // 500 ms
+#define PHYSEC_SYNC_WORD            0x67
+#define PHYSEC_PROBE_REC_TIMEOUT    5000
+
+#define PHYSEC_PKT_IDENTIFIER       (uint16_t) 0xe4b9
+
+#define PHYSEC_N_MAX_MEASURE        255
+#define PHYSEC_N_REQUIRED_MEASURE   22
+// 128 bits = 16 bytes = a 16-char-table.
+// For now, if this value is changed, the code will not going to adapt.
+#define PHYSEC_KEY_SIZE             128
+// future update: need to handle bits key size which are not byte aligned
+#define PHYSEC_KEY_SIZE_BYTES       (int16_t) PHYSEC_KEY_SIZE / 8
+
+#define PHYSEC_DEV_ID_LEN           6
+#define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1
+#define PHYSEC_KEYGEN_PAYLOAD_SIZE  PHYSEC_DEV_ID_LEN+1
+#define PHYSEC_MAX_PAYLOAD_SIZE     PHYSEC_KEYGEN_PAYLOAD_SIZE
+// should be equal to sizeof(PHYSEC_packet)
+#define PHYSEC_MAX_PKT_SIZE         3+PHYSEC_MAX_PAYLOAD_SIZE
+
+#define PHYSEC_PROBE_RECONCIL_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1+PHYSEC_N_MAX_MEASURE
+
+
+
+/*!
+ *  PHYSEC data structures
+ */
+
+/*!
+ * Structure to stores the rssi measurments extracted from transceiver
+ * during key generation procedure
+ * rssi_msrmts_delay :
+ *  a float between 0 and 1
+ *  = 0 in case of initiating measurments
+ */
+typedef struct _PHYSEC_RssiMsrmts {
+    uint8_t nb_msrmts;
+    int8_t *rssi_msrmts;
+    float rssi_msrmts_delay;
+} PHYSEC_RssiMsrmts;
+
+/*!
+ * Structure to synchronize devices during key generation
+ */
+typedef struct _PHYSEC_Sync {
+    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
+    uint8_t rmt_dev_id[PHYSEC_DEV_ID_LEN];
+    uint8_t cnt;
+} PHYSEC_Sync;
+
+/***
+ *** Packet structures regarding packet type
+ ***/
+// for now this enum size is 4 bytes so we need to cast it to uint8_t
+// future update: we need to see if most of the mcu supports compilation
+// flags to reduce enum size
+typedef enum _PHYSEC_packet_type {
+    PHYSEC_PT_NONE = 0,
+    PHYSEC_PT_KEYGEN,
+    PHYSEC_PT_PROBE,
+    PHYSEC_PT_PROBE_RECONCIL,
+
+    PHYSEC_PT_MAX = 255
+} PHYSEC_PacketType;
+
+typedef struct _PHYSEC_packet {
+    uint16_t identifier;        // identifies a PHYSEC packet
+    uint8_t type;
+    uint8_t payload[PHYSEC_MAX_PAYLOAD_SIZE];
+} __attribute__((__packed__)) PHYSEC_Packet;
+
+typedef struct _PHYSEC_probe {
+    uint8_t id[PHYSEC_DEV_ID_LEN];
+    uint8_t cnt;
+} PHYSEC_Probe;
+
+typedef struct _PHYSEC_keygen {
+
+} PHYSEC_KeyGen;
+
+typedef struct _PHYSEC_Key {
+    uint8_t key[PHYSEC_KEY_SIZE_BYTES];
+} PHYSEC_Key;
+
+#define PHYSEC_PKT_SENTINEL     0xFE69
+typedef struct _PHYSEC_probe_reconcil {
+    uint8_t id[PHYSEC_DEV_ID_LEN];
+    union {
+        struct {
+            uint8_t new_len;
+            uint8_t ssi[PHYSEC_N_MAX_MEASURE];
+        } ans;
+        uint8_t req[PHYSEC_N_MAX_MEASURE];
+    } payload;
+} PHYSEC_ProbeReconcil;
+
+struct density {
+    int8_t q_0;
+    uint16_t bin_nbr;
+    int8_t *bins;
+    double *values;
+};
+
+// List of generated keys
+struct peer_key{
+    uint32_t peer_id;
+    uint8_t key[16];
+    struct peer_key *next;
+};
+
+typedef struct peer_key** peer_key_list_t;
+
+#endif
+
 typedef struct {
     mp_obj_base_t     base;
     mp_obj_t          handler;
@@ -245,7 +371,12 @@ typedef struct {
     uint8_t           tx_trials;
 
     #ifdef PHYSEC
+
     uint32_t        physec_device_id;
+    uint32_t        physec_remote_device_id;
+
+    struct peer_key *peer_key_list;
+
     #endif
 
 } lora_obj_t;
@@ -327,6 +458,20 @@ static int lora_socket_sendto (struct _mod_network_socket_obj_t *s, const byte *
 
 static bool lora_lbt_is_free(void);
 STATIC mp_obj_t lora_nvram_erase (mp_obj_t self_in);
+
+#ifdef PHYSEC
+// List of generated keys
+void peer_key_list_init(peer_key_list_t pkl);
+void peer_key_list_free(peer_key_list_t pkl);
+void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key);
+/*
+return value:
+    0  : peer_id not found, key_out = NULL.
+    1   : peer_id founded and the key is copied in the key_out.
+*/
+char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out);
+void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id);
+#endif
 
 /******************************************************************************
  DECLARE PUBLIC DATA
@@ -1839,7 +1984,8 @@ STATIC const mp_arg_t lora_init_args[] = {
     { MP_QSTR_device_class, MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = CLASS_A} },
     { MP_QSTR_region,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
     #ifdef PHYSEC
-    { MP_QSTR_physec_device_id,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    { MP_QSTR_physec_device_id,              MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    { MP_QSTR_physec_remote_device_id,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
     #endif
 };
 STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_uint_t n_kw, const mp_obj_t *all_args) {
@@ -1868,11 +2014,13 @@ STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_ui
     }
 
     #ifdef PHYSEC
-    //set device id
+    // Set device id
     self->physec_device_id = (uint32_t) MP_OBJ_SMALL_INT_VALUE(args[16].u_obj);
-    // memcpy(&(self->physec_device_id), &(args[16].u_obj), sizeof(uint32_t));
-    // printf("physec device id = %d\n", MP_OBJ_SMALL_INT_VALUE(args[16].u_obj));
-    // printf("physec device id = %d\n", MP_OBJ_SMALL_INT_VALUE(self->physec_device_id));
+    self->physec_remote_device_id = (uint32_t) MP_OBJ_SMALL_INT_VALUE(args[17].u_obj);
+
+    // init key per peer list
+    peer_key_list_init(&(self->peer_key_list));
+
     #endif
 
     return (mp_obj_t)self;
@@ -2226,12 +2374,22 @@ STATIC mp_obj_t lora_physec_device_id (mp_uint_t n_args, const mp_obj_t *args) {
     if (n_args == 1) {
         return mp_obj_new_int(self->physec_device_id);
     } else {
-        // memcpy(&(self->physec_device_id), &(args[1]), sizeof(mp_obj_t));
         self->physec_device_id = (uint32_t) mp_obj_get_int(args[1]);
         return mp_const_none;
     }
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lora_physec_device_id_obj, 1, 2, lora_physec_device_id);
+
+STATIC mp_obj_t lora_physec_remote_device_id (mp_uint_t n_args, const mp_obj_t *args) {
+    lora_obj_t *self = args[0];
+    if (n_args == 1) {
+        return mp_obj_new_int(self->physec_remote_device_id);
+    } else {
+        self->physec_remote_device_id = (uint32_t) mp_obj_get_int(args[1]);
+        return mp_const_none;
+    }
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lora_physec_remote_device_id_obj, 1, 2, lora_physec_remote_device_id);
 
 STATIC mp_obj_t lora_power_mode(mp_uint_t n_args, const mp_obj_t *args) {
     lora_obj_t *self = args[0];
@@ -2510,119 +2668,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 
 #define PHYSEC
 #ifdef PHYSEC
-/*!
- * PHYSEC interface
- */
 
-/*!
- * PHYSEC defines
- */
-
-// Device ID length for KEY GENERATION
-#define PHYSEC_KEYGEN_FREQUENCY     867900000
-#define PHYSEC_PROBE_TIMEOUT        500         // 500 ms
-#define PHYSEC_SYNC_WORD            0x67
-#define PHYSEC_PROBE_REC_TIMEOUT    5000
-
-#define PHYSEC_PKT_IDENTIFIER       (uint16_t) 0xe4b9
-
-#define PHYSEC_N_MAX_MEASURE        255
-#define PHYSEC_N_REQUIRED_MEASURE   22
-// 128 bits = 16 bytes = a 16-char-table.
-// For now, if this value is changed, the code will not going to adapt.
-#define PHYSEC_KEY_SIZE             128
-// future update: need to handle bits key size which are not byte aligned
-#define PHYSEC_KEY_SIZE_BYTES       (int16_t) PHYSEC_KEY_SIZE / 8
-
-#define PHYSEC_DEV_ID_LEN           6
-#define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1
-#define PHYSEC_KEYGEN_PAYLOAD_SIZE  PHYSEC_DEV_ID_LEN+1
-#define PHYSEC_MAX_PAYLOAD_SIZE     PHYSEC_KEYGEN_PAYLOAD_SIZE
-// should be equal to sizeof(PHYSEC_packet)
-#define PHYSEC_MAX_PKT_SIZE         3+PHYSEC_MAX_PAYLOAD_SIZE
-
-#define PHYSEC_PROBE_RECONCIL_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1+PHYSEC_N_MAX_MEASURE
-
-
-
-/*!
- *  PHYSEC data structures
- */
-
-/*!
- * Structure to stores the rssi measurments extracted from transceiver
- * during key generation procedure
- * rssi_msrmts_delay :
- *  a float between 0 and 1
- *  = 0 in case of initiating measurments
- */
-typedef struct _PHYSEC_RssiMsrmts {
-    uint8_t nb_msrmts;
-    int8_t *rssi_msrmts;
-    float rssi_msrmts_delay;
-} PHYSEC_RssiMsrmts;
-
-/*!
- * Structure to synchronize devices during key generation
- */
-typedef struct _PHYSEC_Sync {
-    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t rmt_dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t cnt;
-} PHYSEC_Sync;
-
-/***
- *** Packet structures regarding packet type
- ***/
-// for now this enum size is 4 bytes so we need to cast it to uint8_t
-// future update: we need to see if most of the mcu supports compilation
-// flags to reduce enum size
-typedef enum _PHYSEC_packet_type {
-    PHYSEC_PT_NONE = 0,
-    PHYSEC_PT_KEYGEN,
-    PHYSEC_PT_PROBE,
-    PHYSEC_PT_PROBE_RECONCIL,
-
-    PHYSEC_PT_MAX = 255
-} PHYSEC_PacketType;
-
-typedef struct _PHYSEC_packet {
-    uint16_t identifier;        // identifies a PHYSEC packet
-    uint8_t type;
-    uint8_t payload[PHYSEC_MAX_PAYLOAD_SIZE];
-} __attribute__((__packed__)) PHYSEC_Packet;
-
-typedef struct _PHYSEC_probe {
-    uint8_t id[PHYSEC_DEV_ID_LEN];
-    uint8_t cnt;
-} PHYSEC_Probe;
-
-typedef struct _PHYSEC_keygen {
-
-} PHYSEC_KeyGen;
-
-typedef struct _PHYSEC_Key {
-    uint8_t key[PHYSEC_KEY_SIZE_BYTES];
-} PHYSEC_Key;
-
-#define PHYSEC_PKT_SENTINEL     0xFE69
-typedef struct _PHYSEC_probe_reconcil {
-    uint8_t id[PHYSEC_DEV_ID_LEN];
-    union {
-        struct {
-            uint8_t new_len;
-            uint8_t ssi[PHYSEC_N_MAX_MEASURE];
-        } ans;
-        uint8_t req[PHYSEC_N_MAX_MEASURE];
-    } payload;
-} PHYSEC_ProbeReconcil;
-
-struct density {
-    int8_t q_0;
-    uint16_t bin_nbr;
-    int8_t *bins;
-    double *values;
-};
 
 /*!
  *  PHYSEC core & utils functions
@@ -3023,13 +3069,6 @@ void PHYSEC_signal_processing_test(){
 // END : Key generation
 
 // Key gen Policy
-struct peer_key{
-    uint32_t peer_id;
-    uint8_t key[16];
-    struct peer_key *next;
-};
-
-typedef struct peer_key** peer_key_list_t;
 
 void peer_key_list_init(peer_key_list_t pkl){
     *pkl = NULL;
@@ -3066,8 +3105,8 @@ void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key){
 
 /*
 return value:
-    -1  : peer_id not found, key_out = NULL.
-    0   : peer_id founded and the key is copied in the key_out.
+    0  : peer_id not found, key_out = NULL.
+    1   : peer_id founded and the key is copied in the key_out.
 */
 char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out){
     
@@ -3076,11 +3115,11 @@ char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uin
     while(pk_curr != NULL){
         if(pk_curr->peer_id == peer_id){
             memcpy(key_out, pk_curr->key, 16*sizeof(uint8_t));
-            return 0;
+            return 1;
         }
     }
 
-    return -1;
+    return 0;
     
 }
 
@@ -4012,6 +4051,7 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     { MP_OBJ_NEW_QSTR(MP_QSTR_physec_sandbox),          (mp_obj_t)&lora_physec_sandbox_obj },
     
     { MP_OBJ_NEW_QSTR(MP_QSTR_physec_device_id),        (mp_obj_t)&lora_physec_device_id_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_physec_remote_device_id),        (mp_obj_t)&lora_physec_remote_device_id_obj },
 #endif
 
 #ifdef LORA_OPENTHREAD_ENABLED
@@ -4172,7 +4212,28 @@ static int lora_socket_send (mod_network_socket_obj_t *s, const byte *buf, mp_ui
 
             #ifdef PHYSEC
             case E_LORA_STACK_MODE_LORAPHYSEC:
-                printf("lora_socket_send using LORAPHYSEC protocol. (device_id = %d)\n", lora_obj.physec_device_id);
+                {
+                    uint8_t key[16];
+                    #ifdef PHYSEC_DEBUG
+                        printf("--- lora_socket_send using LORAPHYSEC protocol ---\n");
+                        printf("\t %d -> %d\n", lora_obj.physec_device_id, lora_obj.physec_remote_device_id);
+                    #endif
+                    if(peer_key_list_get_key_by_peer_id(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key)){
+                        #ifdef PHYSEC_DEBUG
+                            printf("\tkey : [");
+                            for(int i = 0; i<16; i++){
+                                printf(" %d", key[i]);
+                            }
+                            printf("]\n");
+                        #endif
+                    }else{
+                        #ifdef PHYSEC_DEBUG
+                            printf("\t key : Not found. Regestring fake key :\n");
+                        #endif
+                        memset(key, 3, 16*sizeof(uint8_t));
+                        peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key);
+                    }
+                }
                 n_bytes = lora_send (buf, len, s->sock_base.timeout);
                 break;
             #endif

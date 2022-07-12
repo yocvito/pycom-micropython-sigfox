@@ -179,6 +179,140 @@ typedef enum {
     E_LORA_ACTIVATION_ABP
 } lora_activation_t;
 
+#ifdef PHYSEC
+/*!
+ * PHYSEC interface
+ */
+
+/*!
+ * PHYSEC defines
+ */
+
+// Device ID length for KEY GENERATION
+#define PHYSEC_KEYGEN_FREQUENCY     867900000
+#define PHYSEC_PROBE_TIMEOUT        500         // 500 ms
+#define PHYSEC_SYNC_WORD            0x67
+#define PHYSEC_PROBE_REC_TIMEOUT    5000
+
+#define PHYSEC_PKT_IDENTIFIER       (uint16_t) 0xe4b9
+
+#define PHYSEC_N_MAX_MEASURE        255
+#define PHYSEC_N_REQUIRED_MEASURE   22
+// 128 bits = 16 bytes = a 16-char-table.
+// For now, if this value is changed, the code will not going to adapt.
+#define PHYSEC_KEY_SIZE             128
+// future update: need to handle bits key size which are not byte aligned
+#define PHYSEC_KEY_SIZE_BYTES       (int16_t) PHYSEC_KEY_SIZE / 8
+
+#define PHYSEC_CS_COMPRESSED_SIZE   35
+
+#define PHYSEC_DEV_ID_LEN           4
+#define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1
+#define PHYSEC_KEYGEN_PAYLOAD_SIZE  1+PHYSEC_DEV_ID_LEN+PHYSEC_CS_COMPRESSED_SIZE
+#define PHYSEC_MAX_PAYLOAD_SIZE     PHYSEC_KEYGEN_PAYLOAD_SIZE
+// should be equal to sizeof(PHYSEC_packet)
+#define PHYSEC_MAX_PKT_SIZE         3+PHYSEC_MAX_PAYLOAD_SIZE
+
+#define PHYSEC_PROBE_RECONCIL_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1+PHYSEC_N_MAX_MEASURE
+
+
+
+/*!
+ *  PHYSEC data structures
+ */
+
+/*!
+ * Structure to stores the rssi measurments extracted from transceiver
+ * during key generation procedure
+ * rssi_msrmts_delay :
+ *  a float between 0 and 1
+ *  = 0 in case of initiating measurments
+ */
+typedef struct _PHYSEC_RssiMsrmts {
+    uint8_t nb_msrmts;
+    int8_t *rssi_msrmts;
+    float rssi_msrmts_delay;
+} PHYSEC_RssiMsrmts;
+
+/*!
+ * Structure to synchronize devices during key generation
+ */
+typedef struct _PHYSEC_Sync {
+    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
+    uint8_t rmt_dev_id[PHYSEC_DEV_ID_LEN];
+    uint8_t cnt;
+} PHYSEC_Sync;
+
+/***
+ *** Packet structures regarding packet type
+ ***/
+// for now this enum size is 4 bytes so we need to cast it to uint8_t
+// future update: we need to see if most of the mcu supports compilation
+// flags to reduce enum size
+typedef enum _PHYSEC_packet_type {
+    PHYSEC_PT_NONE = 0,
+    PHYSEC_PT_KEYGEN,
+    PHYSEC_PT_PROBE,
+
+    PHYSEC_PT_MAX = 255
+} PHYSEC_PacketType;
+
+typedef struct _PHYSEC_packet {
+    uint16_t identifier;        // identifies a PHYSEC packet
+    uint8_t type;
+    uint8_t payload[PHYSEC_MAX_PAYLOAD_SIZE];
+} __attribute__((__packed__)) PHYSEC_Packet;
+
+typedef struct _PHYSEC_probe {
+    uint8_t id[PHYSEC_DEV_ID_LEN];
+    uint8_t cnt;
+} PHYSEC_Probe;
+
+enum {
+    PHYSEC_KGS_START = 1,
+    PHYSEC_KGS_RECONCIL,
+    PHYSEC_KGS_RESET
+};
+
+typedef struct _PHYSEC_keygen {
+    uint8_t stage;
+    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
+    uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
+} PHYSEC_KeyGen;
+
+typedef struct _PHYSEC_Key {
+    uint8_t key[PHYSEC_KEY_SIZE_BYTES];
+} PHYSEC_Key;
+
+typedef struct _PHYSEC_probe_reconcil {
+    uint8_t id[PHYSEC_DEV_ID_LEN];
+    union {
+        struct {
+            uint8_t new_len;
+            uint8_t ssi[PHYSEC_N_MAX_MEASURE];
+        } ans;
+        uint8_t req[PHYSEC_N_MAX_MEASURE];
+    } payload;
+} PHYSEC_ProbeReconcil;
+
+struct density {
+    int8_t q_0;
+    uint16_t bin_nbr;
+    int8_t *bins;
+    double *values;
+};
+
+// List of generated keys
+struct peer_key{
+    uint32_t peer_id;
+    uint8_t key[16];
+    struct peer_key *next;
+};
+
+typedef struct peer_key** peer_key_list_t;
+
+#endif
+
 typedef struct {
     mp_obj_base_t     base;
     mp_obj_t          handler;
@@ -244,6 +378,16 @@ typedef struct {
     uint8_t           events;
     uint8_t           trigger;
     uint8_t           tx_trials;
+
+    #ifdef PHYSEC
+
+    uint32_t        physec_device_id;
+    uint32_t        physec_remote_device_id;
+
+    struct peer_key *peer_key_list;
+
+    #endif
+
 } lora_obj_t;
 
 typedef struct {
@@ -323,6 +467,20 @@ static int lora_socket_sendto (struct _mod_network_socket_obj_t *s, const byte *
 
 static bool lora_lbt_is_free(void);
 STATIC mp_obj_t lora_nvram_erase (mp_obj_t self_in);
+
+#ifdef PHYSEC
+// List of generated keys
+void peer_key_list_init(peer_key_list_t pkl);
+void peer_key_list_free(peer_key_list_t pkl);
+void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key);
+/*
+return value:
+    0  : peer_id not found, key_out = NULL.
+    1   : peer_id founded and the key is copied in the key_out.
+*/
+char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out);
+void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id);
+#endif
 
 /******************************************************************************
  DECLARE PUBLIC DATA
@@ -1834,6 +1992,10 @@ STATIC const mp_arg_t lora_init_args[] = {
     { MP_QSTR_tx_retries,   MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = 2} },
     { MP_QSTR_device_class, MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = CLASS_A} },
     { MP_QSTR_region,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    #ifdef PHYSEC
+    { MP_QSTR_physec_device_id,              MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    { MP_QSTR_physec_remote_device_id,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    #endif
 };
 STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_uint_t n_kw, const mp_obj_t *all_args) {
     // parse args
@@ -1859,6 +2021,16 @@ STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_ui
         // register it as a network card
         mod_network_register_nic(self);
     }
+
+    #ifdef PHYSEC
+    // Set device id
+    self->physec_device_id = (uint32_t) MP_OBJ_SMALL_INT_VALUE(args[16].u_obj);
+    self->physec_remote_device_id = (uint32_t) MP_OBJ_SMALL_INT_VALUE(args[17].u_obj);
+
+    // init key per peer list
+    peer_key_list_init(&(self->peer_key_list));
+
+    #endif
 
     return (mp_obj_t)self;
 }
@@ -2206,6 +2378,28 @@ STATIC mp_obj_t lora_sf (mp_uint_t n_args, const mp_obj_t *args) {
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lora_sf_obj, 1, 2, lora_sf);
 
+STATIC mp_obj_t lora_physec_device_id (mp_uint_t n_args, const mp_obj_t *args) {
+    lora_obj_t *self = args[0];
+    if (n_args == 1) {
+        return mp_obj_new_int(self->physec_device_id);
+    } else {
+        self->physec_device_id = (uint32_t) mp_obj_get_int(args[1]);
+        return mp_const_none;
+    }
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lora_physec_device_id_obj, 1, 2, lora_physec_device_id);
+
+STATIC mp_obj_t lora_physec_remote_device_id (mp_uint_t n_args, const mp_obj_t *args) {
+    lora_obj_t *self = args[0];
+    if (n_args == 1) {
+        return mp_obj_new_int(self->physec_remote_device_id);
+    } else {
+        self->physec_remote_device_id = (uint32_t) mp_obj_get_int(args[1]);
+        return mp_const_none;
+    }
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lora_physec_remote_device_id_obj, 1, 2, lora_physec_remote_device_id);
+
 STATIC mp_obj_t lora_power_mode(mp_uint_t n_args, const mp_obj_t *args) {
     lora_obj_t *self = args[0];
     lora_cmd_data_t cmd_data;
@@ -2483,539 +2677,487 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 
 #define PHYSEC
 #ifdef PHYSEC
-/*!
- * PHYSEC interface
- */
 
-/*!
- * PHYSEC defines
- */
-
-// Device ID length for KEY GENERATION
-#define PHYSEC_KEYGEN_FREQUENCY     867900000
-#define PHYSEC_PROBE_TIMEOUT        500         // 500 ms
-#define PHYSEC_SYNC_WORD            0x67
-#define PHYSEC_PROBE_REC_TIMEOUT    5000
-
-#define PHYSEC_PKT_IDENTIFIER       (uint16_t) 0xe4b9
-
-#define PHYSEC_N_MAX_MEASURE        255
-#define PHYSEC_N_REQUIRED_MEASURE   22
-// 128 bits = 16 bytes = a 16-char-table.
-// For now, if this value is changed, the code will not going to adapt.
-#define PHYSEC_KEY_SIZE             128
-// future update: need to handle bits key size which are not byte aligned
-#define PHYSEC_KEY_SIZE_BYTES       (int16_t) PHYSEC_KEY_SIZE / 8
-
-#define PHYSEC_CS_COMPRESSED_SIZE   35
-
-#define PHYSEC_DEV_ID_LEN           4
-#define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1
-#define PHYSEC_KEYGEN_PAYLOAD_SIZE  1+PHYSEC_DEV_ID_LEN+PHYSEC_CS_COMPRESSED_SIZE
-#define PHYSEC_MAX_PAYLOAD_SIZE     PHYSEC_KEYGEN_PAYLOAD_SIZE
-// should be equal to sizeof(PHYSEC_packet)
-#define PHYSEC_MAX_PKT_SIZE         3+PHYSEC_MAX_PAYLOAD_SIZE
-
-#define PHYSEC_PROBE_RECONCIL_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1+PHYSEC_N_MAX_MEASURE
-
-
-
-/*!
- *  PHYSEC data structures
- */
-
-/*!
- * Structure to stores the rssi measurments extracted from transceiver
- * during key generation procedure
- * rssi_msrmts_delay :
- *  a float between 0 and 1
- *  = 0 in case of initiating measurments
- */
-typedef struct _PHYSEC_RssiMsrmts {
-    uint8_t nb_msrmts;
-    int8_t *rssi_msrmts;
-    float rssi_msrmts_delay;
-} PHYSEC_RssiMsrmts;
-
-/*!
- * Structure to synchronize devices during key generation
- */
-typedef struct _PHYSEC_Sync {
-    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t rmt_dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t cnt;
-} PHYSEC_Sync;
-
-/***
- *** Packet structures regarding packet type
- ***/
-// for now this enum size is 4 bytes so we need to cast it to uint8_t
-// future update: we need to see if most of the mcu supports compilation
-// flags to reduce enum size
-typedef enum _PHYSEC_packet_type {
-    PHYSEC_PT_NONE = 0,
-    PHYSEC_PT_KEYGEN,
-    PHYSEC_PT_PROBE,
-
-    PHYSEC_PT_MAX = 255
-} PHYSEC_PacketType;
-
-typedef struct _PHYSEC_packet {
-    uint16_t identifier;        // identifies a PHYSEC packet
-    uint8_t type;
-    uint8_t payload[PHYSEC_MAX_PAYLOAD_SIZE];
-} __attribute__((__packed__)) PHYSEC_Packet;
-
-typedef struct _PHYSEC_probe {
-    uint8_t id[PHYSEC_DEV_ID_LEN];
-    uint8_t cnt;
-} PHYSEC_Probe;
-
-enum {
-    PHYSEC_KGS_START = 1,
-    PHYSEC_KGS_RECONCIL,
-    PHYSEC_KGS_RESET
-};
-
-typedef struct _PHYSEC_keygen {
-    uint8_t stage;
-    uint8_t dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
-} PHYSEC_KeyGen;
-
-typedef struct _PHYSEC_Key {
-    uint8_t key[PHYSEC_KEY_SIZE_BYTES];
-} PHYSEC_Key;
-
-typedef struct _PHYSEC_probe_reconcil {
-    uint8_t id[PHYSEC_DEV_ID_LEN];
-    union {
-        struct {
-            uint8_t new_len;
-            uint8_t ssi[PHYSEC_N_MAX_MEASURE];
-        } ans;
-        uint8_t req[PHYSEC_N_MAX_MEASURE];
-    } payload;
-} PHYSEC_ProbeReconcil;
-/*
-struct histogram{
-    int8_t q_0;
-    int8_t q_m;
-    int8_t bin_len;
-    uint16_t hist_size;
-    int8_t *hist;
-};
-*/
-struct density {
-    int8_t q_0;
-    uint16_t bin_nbr;
-    int8_t *bins;
-    double *values;
-};
 
 /*!
  *  PHYSEC core & utils functions
  */
 
- // Reciprocity enhancement
+// Reciprocity enhancement
 
- // --- Filtering
+// --- Filtering
 
- PHYSEC_RssiMsrmts PHYSEC_golay_filter(PHYSEC_RssiMsrmts rssi_msermts){
+void PHYSEC_golay_filter(PHYSEC_RssiMsrmts *rssi_msermts){
 
-     int8_t coef[] = {-3, 12, 17, 12, -3};
-     float normalization;
+    int8_t coef[] = {-3, 12, 17, 12, -3};
+    float normalization;
 
-     int rssi_tmp; // it is not normalisze so int8_t is not a valid type.
+    int rssi_tmp; // it is not normalisze so int8_t is not a valid type.
 
-     PHYSEC_RssiMsrmts rssi_msermts_filterd;
-     rssi_msermts_filterd.nb_msrmts = rssi_msermts.nb_msrmts;
-     rssi_msermts_filterd.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
+    int8_t filtred_rssi_msrmts[rssi_msermts->nb_msrmts];
 
-     for(int i_rssi = 0; i_rssi < rssi_msermts.nb_msrmts; i_rssi++){
+    for(int i_rssi = 0; i_rssi < rssi_msermts->nb_msrmts; i_rssi++){
 
-         normalization = 0;
-         rssi_tmp = 0;
+        normalization = 0;
+        rssi_tmp = 0;
 
-         for(int i_coef = -2; i_coef < 3; i_coef++){
-             if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts.nb_msrmts){
-                 rssi_tmp += coef[i_coef+2] * rssi_msermts.rssi_msrmts[i_rssi+i_coef];
-                 normalization += coef[i_coef+2];
-             }
-         }
+        for(int i_coef = -2; i_coef < 3; i_coef++){
+            if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts->nb_msrmts){
+                rssi_tmp += coef[i_coef+2] * rssi_msermts->rssi_msrmts[i_rssi+i_coef];
+                normalization += coef[i_coef+2];
+            }
+        }
 
-         rssi_msermts_filterd.rssi_msrmts[i_rssi] = (int8_t) ((float)(rssi_tmp)/normalization);
+        filtred_rssi_msrmts[i_rssi] = (int8_t) ((float)(rssi_tmp)/normalization);
 
-     }
+    }
 
-     return rssi_msermts_filterd;
+    memcpy(rssi_msermts->rssi_msrmts, filtred_rssi_msrmts, rssi_msermts->nb_msrmts * sizeof(int8_t));
 
- }
+}
 
- // --- Interpolation
+// --- Interpolation
 
- PHYSEC_RssiMsrmts PHYSEC_interpolation(PHYSEC_RssiMsrmts rssi_msermts){
+void PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
 
-     PHYSEC_RssiMsrmts rssi_msermts_estimation;
-     rssi_msermts_estimation.nb_msrmts = rssi_msermts.nb_msrmts;
-     rssi_msermts_estimation.rssi_msrmts = malloc(rssi_msermts.nb_msrmts * sizeof(int8_t));
-     rssi_msermts_estimation.rssi_msrmts_delay = 0;
+    int8_t interpolated_rssi_msrmts[rssi_msermts->nb_msrmts];
 
-     int8_t delta_rssi;
-     float rssi_err;
+    int8_t delta_rssi;
+    float rssi_err;
 
-     if(rssi_msermts.nb_msrmts > 0 && rssi_msermts.rssi_msrmts_delay > 0){
+    if(rssi_msermts->nb_msrmts > 0 && rssi_msermts->rssi_msrmts_delay > 0){
 
-         rssi_msermts_estimation.rssi_msrmts[0] = rssi_msermts.rssi_msrmts[0];
+        interpolated_rssi_msrmts[0] = rssi_msermts->rssi_msrmts[0];
 
-         for(int i = 1; i < rssi_msermts.nb_msrmts; i++){
-             delta_rssi = rssi_msermts.rssi_msrmts[i] - rssi_msermts.rssi_msrmts[i-1];
-             rssi_err = (rssi_msermts.rssi_msrmts_delay * (float)(delta_rssi));
-             rssi_msermts_estimation.rssi_msrmts[i] = rssi_msermts.rssi_msrmts[i] - rssi_err;
-         }
+        for(int i = 1; i < rssi_msermts->nb_msrmts; i++){
+            delta_rssi = rssi_msermts->rssi_msrmts[i] - rssi_msermts->rssi_msrmts[i-1];
+            rssi_err = (rssi_msermts->rssi_msrmts_delay * (float)(delta_rssi));
+            interpolated_rssi_msrmts[i] = rssi_msermts->rssi_msrmts[i] - rssi_err;
+        }
 
-     }
+    }
 
-     return rssi_msermts_estimation;
+    rssi_msermts->rssi_msrmts_delay = 0;
+    memcpy(rssi_msermts->rssi_msrmts, interpolated_rssi_msrmts, rssi_msermts->nb_msrmts*sizeof(int8_t));
 
- }
+}
 
- // Key generation
+// Key generation
 
- // -- Quntification
+// -- Quntification
 
- #define PHYSEC_QUNTIFICATION_WINDOW_LEN 10
+#define PHYSEC_QUNTIFICATION_WINDOW_LEN 10
 
- void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_window_size){
+void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_window_size){
 
-     if(rssi_window_size <= 1){
-         return;
-     }
+    if(rssi_window_size <= 1){
+        return;
+    }
 
-     int8_t *tab1 = rssi_window;
-     int8_t tab1_size = (int8_t) (((float)(rssi_window_size))/2.0);
-     int8_t *tab2 = rssi_window+tab1_size;
-     int8_t tab2_size = rssi_window_size - tab1_size;
+    int8_t *tab1 = rssi_window;
+    int8_t tab1_size = (int8_t) (((float)(rssi_window_size))/2.0);
+    int8_t *tab2 = rssi_window+tab1_size;
+    int8_t tab2_size = rssi_window_size - tab1_size;
 
-     int8_t tmp_tab[rssi_window_size];
+    int8_t tmp_tab[rssi_window_size];
 
-     PHYSEC_quntification_sort_rssi_window(tab1, tab1_size);
-     PHYSEC_quntification_sort_rssi_window(tab2, tab2_size);
+    PHYSEC_quntification_sort_rssi_window(tab1, tab1_size);
+    PHYSEC_quntification_sort_rssi_window(tab2, tab2_size);
 
-     int i1=0, i2=0, i=0;
+    int i1=0, i2=0, i=0;
 
-     while(i<rssi_window_size){
-         if(i2 >= tab2_size){
-             tmp_tab[i++] =  tab1[i1++];
-             continue;
-         }
-         if(i1 >= tab1_size){
-             tmp_tab[i++] =  tab2[i2++];
-             continue;
-         }
-         if(tab1[i1]<tab2[i2]){
-             tmp_tab[i++] =  tab1[i1++];
-         }else{
-             tmp_tab[i++] =  tab2[i2++];
-         }
-     }
-
-     memcpy(rssi_window, tmp_tab, rssi_window_size*sizeof(int8_t));
- }
-
- // ---> Density function estimation
+    while(i<rssi_window_size){
+        if(i2 >= tab2_size){
+            tmp_tab[i++] =  tab1[i1++];
+            continue;
+        }
+        if(i1 >= tab1_size){
+            tmp_tab[i++] =  tab2[i2++];
+            continue;
+        }
+        if(tab1[i1]<tab2[i2]){
+            tmp_tab[i++] =  tab1[i1++];
+        }else{
+            tmp_tab[i++] =  tab2[i2++];
+        }
+    }
 
- struct density PHYSEC_quntification_get_density(int8_t *rssi_window){
-
-     struct density d;
+    memcpy(rssi_window, tmp_tab, rssi_window_size*sizeof(int8_t));
+}
+
+// ---> Density function estimation
 
-     int8_t last_ele;
-
-     // sorting
-     int8_t sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN];
-     memcpy(sorted_rssi_window, rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN*sizeof(int8_t));
-     PHYSEC_quntification_sort_rssi_window(sorted_rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN);
-
-     // q_0
-     d.q_0 = sorted_rssi_window[0];
-
-     // bins number
-     last_ele = sorted_rssi_window[0];
-     d.bin_nbr = 0;
-     for(int i = 1; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
-         if(sorted_rssi_window[i] != last_ele){
-             d.bin_nbr++;
-             last_ele = sorted_rssi_window[i];
-         }
-     }
-
-     // bins & values
-     d.bins = malloc(d.bin_nbr * sizeof(int8_t));
-     d.values = malloc(d.bin_nbr * sizeof(double));
-
-     last_ele = sorted_rssi_window[0];
-     char rep_nbr = 1;
-     int j = 0;
-     for(int i = 1; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
-         if(sorted_rssi_window[i] != last_ele){
-
-             d.bins[j] = sorted_rssi_window[i] - last_ele;
-             d.values[j] = 1.0/((double)(d.bins[j]*PHYSEC_QUNTIFICATION_WINDOW_LEN))*((double)rep_nbr);
-             j++;
-
-             last_ele = sorted_rssi_window[i];
-             rep_nbr = 1;
-         }else{
-             rep_nbr++;
-         }
-     }
-
-     return d;
-
- }
-
- void PHYSEC_quntification_free_density(struct density d){
-     free(d.bins);
-     free(d.values);
- }
-
- /*
-     CDF : cumulative distribution function
- */
- int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density d){
-
-     if(cdf < 0 || cdf > 1){
-         fprintf(stderr, "PHYSEC_quntification_inverse_density : cdf isn't between 0 and 1.\n");
-         return -1;
-     }
-
-     int8_t q = d.q_0, q_rest;
-     double integ = 0, current_integ;
-
-     for(int i = 0; i < d.bin_nbr; i++){
-         current_integ = d.bins[i]*d.values[i];
-         if(cdf < integ+current_integ){
-             q_rest = (int8_t) ((cdf - integ)/d.values[i]);
-             return q + q_rest;
-         }else{
-             q += d.bins[i];
-             integ += current_integ;
-         }
-     }
-
-     return q;
- }
-
- // <--- Density function estimation
-
-
- int8_t PHYSEC_quntification_compute_level_nbr(struct density d){
-
-     double entropy = 0;
-     double proba;
-     int8_t nbr_bit;
-
-     for(int i = 0; i < d.bin_nbr; i++){
-         proba = d.values[i] * d.bins[i];
-         if(proba>0){
-             entropy +=  proba*log2(proba);
-         }
-     }
-
-     nbr_bit = (int8_t) (-entropy);
-
-     return pow(2,nbr_bit);
- }
-
- /*
-     return value:
-         level index strating from 1.
-         0 : in case of error
- */
- unsigned char PHYSEC_quntification_get_level(
-     int8_t rssi,
-     int8_t *threshold_starts,
-     int8_t *threshold_ends,
-     int8_t qunatification_level_nbr
- ){
-     unsigned char level = 1;
-     for(int i = 0; i<qunatification_level_nbr; i++){
-         if(rssi<threshold_starts[i])
-             return 0;
-         if(rssi<=threshold_ends[i])
-             return level;
-         level++;
-     }
-     return 0;
- }
-
- /*
-     Return value :
-         number of generated bit (from left)
- */
- int PHYSEC_quntification(
-     PHYSEC_RssiMsrmts rssi_msermts,
-     double data_to_band_ration,
-     char *key_output
- ){
-
-     uint8_t nbr_of_generated_bits_by_char = 0, key_char_index = 0;
-     uint8_t nbr_of_processed_windows = 0;
-     uint16_t rssi_window_align_index = 0;
-     int8_t *rssi_window;
-     int8_t qunatification_level_nbr;
-     struct density density;
-
-
-     // filtering
-     PHYSEC_RssiMsrmts rssi_msermts_filtered = PHYSEC_golay_filter(rssi_msermts);
-
-     // same time measure estimation
-     PHYSEC_RssiMsrmts rssi_msermts_estimated = PHYSEC_interpolation(rssi_msermts_filtered);
-     free(rssi_msermts_filtered.rssi_msrmts);
-     rssi_msermts.rssi_msrmts = rssi_msermts_estimated.rssi_msrmts;
-
-     // preaparing for key generation
-     memset(key_output, 0, 16*sizeof(char));
-     unsigned char level;
-     int8_t rest_bits;
-     uint8_t gen_bits;
-
-     while(rssi_window_align_index  < rssi_msermts.nb_msrmts){
-
-         // rssi window
-         rssi_window = rssi_msermts.rssi_msrmts+rssi_window_align_index;
-
-         // computing density
-         density = PHYSEC_quntification_get_density(rssi_window);
-
-         // computing level number
-         qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(density);
-
-         // computing thresholds
-         int8_t threshold_starts[qunatification_level_nbr];
-         int8_t threshold_ends[qunatification_level_nbr];
-         double cdf = 0;
-         for(int i = 0; i<qunatification_level_nbr; i++){
-             threshold_starts[i] = PHYSEC_quntification_inverse_cdf(cdf, density);
-             cdf+=(1-data_to_band_ration)/qunatification_level_nbr;
-             threshold_ends[i] = PHYSEC_quntification_inverse_cdf(cdf, density);
-             cdf+=data_to_band_ration/(qunatification_level_nbr-1);
-         }
-
-         // quantification
-         gen_bits = (uint8_t) log2(qunatification_level_nbr);
-         for(int i = 0; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
-             level = PHYSEC_quntification_get_level(
-                 rssi_window[i],
-                 threshold_starts,
-                 threshold_ends,
-                 qunatification_level_nbr
-             );
-             if(level > 0){
-                 level--;
-                 rest_bits = gen_bits - (8-nbr_of_generated_bits_by_char);
-                 if(rest_bits>0){
-                     key_output[key_char_index] += level>>rest_bits;
-                     key_char_index++;
-                     if(key_char_index==16){
-                         return 128;
-                     }
-                     key_output[key_char_index] += level<<(8+gen_bits-rest_bits);
-                     nbr_of_generated_bits_by_char = rest_bits;
-                 }else{
-                     key_output[key_char_index] += level<<(8-nbr_of_generated_bits_by_char-gen_bits);
-                     nbr_of_generated_bits_by_char += gen_bits;
-                 }
-
-             }
-         }
-
-
-         nbr_of_processed_windows++;
-         rssi_window_align_index = (uint16_t)(nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN);
-     }
-
-     return 8*key_char_index+nbr_of_generated_bits_by_char;
-
- }
-
- #ifdef PHYSEC_DEBUG
-
- void PHYSEC_signal_processing_test(){
-
-     int8_t rssi_tmp[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
-
-     PHYSEC_RssiMsrmts M;
-     M.nb_msrmts = 10;
-     M.rssi_msrmts = rssi_tmp;
-     M.rssi_msrmts_delay = 12;
-
-     printf("rssi original :");
-     for(int i = 0; i < M.nb_msrmts; i++){
-         printf(" %d", M.rssi_msrmts[i]);
-
-     }
-     printf("\n");
-
-     PHYSEC_RssiMsrmts M_filtered = PHYSEC_golay_filter(M);
-     printf("rssi filtered :");
-     for(int i = 0; i < M_filtered.nb_msrmts; i++){
-         printf(" %d", M_filtered.rssi_msrmts[i]);
-     }
-     printf("\n");
-
-     PHYSEC_RssiMsrmts M_estimated = PHYSEC_interpolation(M_filtered);
-     printf("rssi estimated :");
-     for(int i = 0; i < M_estimated.nb_msrmts; i++){
-         printf(" %d", M_estimated.rssi_msrmts[i]);
-     }
-     printf("\n");
-
-     printf("density estimation :\n");
-     struct density density = PHYSEC_quntification_get_density(M_estimated.rssi_msrmts);
-     printf("\tq_0 : %d\n", density.q_0);
-     printf("\tbin_nbr : %d\n", density.bin_nbr);
-     printf("\tbins = [");
-     for(int i = 0; i < density.bin_nbr; i++){
-         printf(" %d", density.bins[i]);
-     }
-     printf("]\n");
-     printf("\tvalues = [");
-     for(int i = 0; i < density.bin_nbr; i++){
-         printf(" %lf", density.values[i]);
-     }
-     printf("]\n");
-
-     int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(density);
-     printf("Quantification level number : %d\n", qunatification_level_nbr);
-
-     // quantification test
-     int8_t rssi_tmp2[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86, 96, 47, 58, 74, 87, 92, 66, 84, 53, 61, 72, 83, 81, 64, 55, 47, 85, 95, 77, 98, 102, 85, 97, 45, 57, 78, 85, 93, 47, 58, 74, 87, 92, 66, 84, 53, 64, 85, 52, 64, 76, 88, 81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
-
-     PHYSEC_RssiMsrmts M2;
-     M2.nb_msrmts = 62;
-     M2.rssi_msrmts = rssi_tmp2;
-     M2.rssi_msrmts_delay = 12;
-
-     char generated_key[16];
-     int generated_key_len = PHYSEC_quntification(M2, 0.1, generated_key);
-
-     printf("Qunatification :\n");
-     printf("\tkey len : %d bits\n", generated_key_len);
-     printf("\tkey = [");
-     for(int i = 0; i < 16; i++){
-         printf("%d ", generated_key[i]);
-     }
-     printf("]\n");
-
-     PHYSEC_quntification_free_density(density);
-     free(M_estimated.rssi_msrmts);
-     free(M_filtered.rssi_msrmts);
-
- }
-
- #endif
+struct density PHYSEC_quntification_get_density(int8_t *rssi_window){
+
+    struct density d;
+
+    int8_t last_ele;
+
+    // sorting
+    int8_t sorted_rssi_window[PHYSEC_QUNTIFICATION_WINDOW_LEN];
+    memcpy(sorted_rssi_window, rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN*sizeof(int8_t));
+    PHYSEC_quntification_sort_rssi_window(sorted_rssi_window, PHYSEC_QUNTIFICATION_WINDOW_LEN);
+
+    // q_0
+    d.q_0 = sorted_rssi_window[0];
+
+    // bins number
+    last_ele = sorted_rssi_window[0];
+    d.bin_nbr = 0;
+    for(int i = 1; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+        if(sorted_rssi_window[i] != last_ele){
+            d.bin_nbr++;
+            last_ele = sorted_rssi_window[i];
+        }
+    }
+
+    // bins & values
+    d.bins = malloc(d.bin_nbr * sizeof(int8_t));
+    d.values = malloc(d.bin_nbr * sizeof(double));
+
+    last_ele = sorted_rssi_window[0];
+    char rep_nbr = 1;
+    int j = 0;
+    for(int i = 1; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+        if(sorted_rssi_window[i] != last_ele){
+
+            d.bins[j] = sorted_rssi_window[i] - last_ele;
+            d.values[j] = 1.0/((double)(d.bins[j]*PHYSEC_QUNTIFICATION_WINDOW_LEN))*((double)rep_nbr);
+            j++;
+
+            last_ele = sorted_rssi_window[i];
+            rep_nbr = 1;
+        }else{
+            rep_nbr++;
+        }
+    }
+
+    return d;
+
+}
+
+void PHYSEC_quntification_free_density(struct density *d){
+    free(d->bins);
+    free(d->values);
+}
+
+/*
+    CDF : cumulative distribution function
+*/
+int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
+
+    if(cdf < 0 || cdf > 1){
+        fprintf(stderr, "PHYSEC_quntification_inverse_density : cdf isn't between 0 and 1.\n");
+        return -1;
+    }
+
+    int8_t q = d->q_0, q_rest;
+    double integ = 0, current_integ;
+
+    for(int i = 0; i < d->bin_nbr; i++){
+        current_integ = d->bins[i]*d->values[i];
+        if(cdf < integ+current_integ){
+            q_rest = (int8_t) ((cdf - integ)/d->values[i]);
+            return q + q_rest;
+        }else{
+            q += d->bins[i];
+            integ += current_integ;
+        }
+    }
+
+    return q;
+}
+
+// <--- Density function estimation
+
+
+int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
+
+    double entropy = 0;
+    double proba;
+    int8_t nbr_bit;
+
+    for(int i = 0; i < d->bin_nbr; i++){
+        proba = d->values[i] * d->bins[i];
+        if(proba>0){
+            entropy +=  proba*log2(proba);
+        }
+    }
+
+    nbr_bit = (int8_t) (-entropy);
+
+    return pow(2,nbr_bit);
+}
+
+/*
+    return value:
+        level index strating from 1.
+        0 : in case of error
+*/
+unsigned char PHYSEC_quntification_get_level(
+    int8_t rssi,
+    int8_t *threshold_starts,
+    int8_t *threshold_ends,
+    int8_t qunatification_level_nbr
+){
+    unsigned char level = 1;
+    for(int i = 0; i<qunatification_level_nbr; i++){
+        if(rssi<threshold_starts[i])
+            return 0;
+        if(rssi<=threshold_ends[i])
+            return level;
+        level++;
+    }
+    return 0;
+}
+
+/*
+    Return value :
+        number of generated bit (from left)
+        key_output = 128 bits = 16 bytes = a 16-uint8_t-table.
+*/
+int PHYSEC_quntification(
+    PHYSEC_RssiMsrmts *rssi_msermts,
+    double data_to_band_ration,
+    uint8_t *key_output
+){
+
+    uint8_t nbr_of_generated_bits_by_char = 0, key_char_index = 0;
+    uint8_t nbr_of_processed_windows = 0;
+    uint16_t rssi_window_align_index = 0;
+    int8_t *rssi_window;
+    int8_t qunatification_level_nbr;
+    struct density density;
+
+
+    // filtering
+    PHYSEC_golay_filter(rssi_msermts);
+
+    // same time measure estimation
+    PHYSEC_interpolation(rssi_msermts);
+
+    // preaparing for key generation
+    memset(key_output, 0, 16*sizeof(uint8_t));
+    unsigned char level;
+    int8_t rest_bits;
+    uint8_t gen_bits;
+
+    while(rssi_msermts->nb_msrmts - rssi_window_align_index  >= PHYSEC_QUNTIFICATION_WINDOW_LEN){
+
+        // rssi window
+        rssi_window = rssi_msermts->rssi_msrmts+rssi_window_align_index;
+
+        // computing density
+        density = PHYSEC_quntification_get_density(rssi_window);
+
+        // computing level number
+        qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(&density);
+
+        // computing thresholds
+        int8_t threshold_starts[qunatification_level_nbr];
+        int8_t threshold_ends[qunatification_level_nbr];
+        double cdf = 0;
+        for(int i = 0; i<qunatification_level_nbr; i++){
+            threshold_starts[i] = PHYSEC_quntification_inverse_cdf(cdf, &density);
+            cdf+=(1-data_to_band_ration)/qunatification_level_nbr;
+            threshold_ends[i] = PHYSEC_quntification_inverse_cdf(cdf, &density);
+            cdf+=data_to_band_ration/(qunatification_level_nbr-1);
+        }
+
+        // quantification
+        gen_bits = (uint8_t) log2(qunatification_level_nbr);
+        for(int i = 0; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+            level = PHYSEC_quntification_get_level(
+                rssi_window[i],
+                threshold_starts,
+                threshold_ends,
+                qunatification_level_nbr
+            );
+            if(level > 0){
+                level--;
+                rest_bits = gen_bits - (8-nbr_of_generated_bits_by_char);
+                if(rest_bits>0){
+                    key_output[key_char_index] += level>>rest_bits;
+                    key_char_index++;
+                    if(key_char_index==16){
+                        return 128;
+                    }
+                    key_output[key_char_index] += level<<(8+gen_bits-rest_bits);
+                    nbr_of_generated_bits_by_char = rest_bits;
+                }else{
+                    key_output[key_char_index] += level<<(8-nbr_of_generated_bits_by_char-gen_bits);
+                    nbr_of_generated_bits_by_char += gen_bits;
+                }
+
+            }
+        }
+
+
+        nbr_of_processed_windows++;
+        rssi_window_align_index = (uint16_t)(nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN);
+    }
+
+    return 8*key_char_index+nbr_of_generated_bits_by_char;
+
+}
+
+#ifdef PHYSEC_DEBUG
+
+void PHYSEC_signal_processing_test(){
+
+    int8_t rssi_tmp[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
+
+    PHYSEC_RssiMsrmts M;
+    M.nb_msrmts = 10;
+    M.rssi_msrmts = rssi_tmp;
+    M.rssi_msrmts_delay = 12;
+
+    printf("rssi original :");
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
+
+    }
+    printf("\n");
+
+    PHYSEC_golay_filter(&M);
+    printf("rssi filtered :");
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    PHYSEC_interpolation(&M);
+    printf("rssi estimated :");
+    for(int i = 0; i < M.nb_msrmts; i++){
+        printf(" %d", M.rssi_msrmts[i]);
+    }
+    printf("\n");
+
+    printf("density estimation :\n");
+    struct density density = PHYSEC_quntification_get_density(M.rssi_msrmts);
+    printf("\tq_0 : %d\n", density.q_0);
+    printf("\tbin_nbr : %d\n", density.bin_nbr);
+    printf("\tbins = [");
+    for(int i = 0; i < density.bin_nbr; i++){
+        printf(" %d", density.bins[i]);
+    }
+    printf("]\n");
+    printf("\tvalues = [");
+    for(int i = 0; i < density.bin_nbr; i++){
+        printf(" %lf", density.values[i]);
+    }
+    printf("]\n");
+
+    int8_t qunatification_level_nbr = PHYSEC_quntification_compute_level_nbr(&density);
+    printf("Quantification level number : %d\n", qunatification_level_nbr);
+
+    // quantification test
+    int8_t rssi_tmp2[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86, 96, 47, 58, 74, 87, 92, 66, 84, 53, 61, 72, 83, 81, 64, 55, 47, 85, 95, 77, 98, 102, 85, 97, 45, 57, 78, 85, 93, 47, 58, 74, 87, 92, 66, 84, 53, 64, 85, 52, 64, 76, 88, 81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
+
+    PHYSEC_RssiMsrmts M2;
+    M2.nb_msrmts = 62;
+    M2.rssi_msrmts = rssi_tmp2;
+    M2.rssi_msrmts_delay = 12;
+
+    uint8_t generated_key[16];
+    int generated_key_len = PHYSEC_quntification(&M2, 0.1, generated_key);
+
+    printf("Qunatification :\n");
+    printf("\tkey len : %d bits\n", generated_key_len);
+    printf("\tkey = [");
+    for(int i = 0; i < 16; i++){
+        printf("%d ", generated_key[i]);
+    }
+    printf("]\n");
+
+    PHYSEC_quntification_free_density(&density);
+
+}
+
+#endif
+// END : Key generation
+
+// Key gen Policy
+
+void peer_key_list_init(peer_key_list_t pkl){
+    *pkl = NULL;
+}
+
+void peer_key_free(struct peer_key *pk){
+    if(pk != NULL){
+        free(pk);
+    }
+}
+
+void peer_key_recursive_free(struct peer_key *pk){
+    if(pk != NULL){
+        peer_key_recursive_free(pk->next);
+        peer_key_free(pk);
+    }
+}
+
+void peer_key_list_free(peer_key_list_t pkl){
+    peer_key_recursive_free(*pkl);
+    *pkl = NULL;
+}
+
+void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key){
+    
+    struct peer_key *pk = malloc(sizeof(struct peer_key));
+    pk->peer_id = peer_id;
+    memcpy(pk->key, key, 16*sizeof(uint8_t));
+    pk->next = *pkl;
+    
+    *pkl = pk;
+
+}
+
+/*
+return value:
+    0  : peer_id not found, key_out = NULL.
+    1   : peer_id founded and the key is copied in the key_out.
+*/
+char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out){
+    
+    struct peer_key *pk_curr = *pkl;
+
+    while(pk_curr != NULL){
+        if(pk_curr->peer_id == peer_id){
+            memcpy(key_out, pk_curr->key, 16*sizeof(uint8_t));
+            return 1;
+        }
+    }
+
+    return 0;
+    
+}
+
+void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
+    
+    struct peer_key *pk_prev = NULL;
+    struct peer_key *pk_curr = *pkl;
+
+    while(pk_curr != NULL){
+        if(pk_curr->peer_id == peer_id){
+            if(pk_prev == NULL){
+                (*pkl)->next = pk_curr->next;
+                peer_key_free(pk_curr);
+                pk_curr = (*pkl)->next;
+            }else{
+                pk_prev->next = pk_curr->next;
+                peer_key_free(pk_curr);
+                pk_curr = pk_prev->next;
+            }
+        }else{
+            pk_prev = pk_curr;
+            pk_curr = pk_curr->next;
+        }
+    }
+    
+}
+
+
+// END : Key gen Policy
 
 /**
  * @brief Returns an approximate toa for a specified SF 
@@ -3218,7 +3360,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
         PHYSEC_Key P = { 0 };
         m.nb_msrmts = cnt;
-        int32_t nbits = PHYSEC_quntification(m, 0.1, (char*) &(P.key));
+        int32_t nbits = PHYSEC_quntification(&m, 0.1, P.key);
 #if PHYSEC_DEBUG
         printf("### QUANTIFICATION DONE\n");
         printf("nbits = %d\n", nbits);
@@ -3428,7 +3570,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                         PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
                         int32_t nbits;
                         // if we did not get enough bits, we reset measurements
-                        if ((nbits = PHYSEC_quntification(m, 0.1, (char*) P.key)) >= PHYSEC_KEY_SIZE)
+                        if ((nbits = PHYSEC_quntification(&m, 0.1, P.key)) >= PHYSEC_KEY_SIZE)
                         {
 #if PHYSEC_DEBUG
                             printf("### QUANTIFICATION DONE\n");
@@ -4136,7 +4278,7 @@ STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
 
-
+    PHYSEC_signal_processing_test();
 
     printf("---------- < PHYSEC sandbox < -----------\n");
 
@@ -4381,8 +4523,35 @@ static int lora_socket_send (mod_network_socket_obj_t *s, const byte *buf, mp_ui
 
             #ifdef PHYSEC
             case E_LORA_STACK_MODE_LORAPHYSEC:
-                printf("lora_socket_send using LORAPHYSEC protocol.\n");
-                n_bytes = lora_send (buf, len, s->sock_base.timeout);
+                {
+                    uint8_t key[16];
+                    #ifdef PHYSEC_DEBUG
+                        printf("--- lora_socket_send using LORAPHYSEC protocol ---\n");
+                        printf("\t %d -> %d\n", lora_obj.physec_device_id, lora_obj.physec_remote_device_id);
+                    #endif
+                    if(peer_key_list_get_key_by_peer_id(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key)){
+                        #ifdef PHYSEC_DEBUG
+                            printf("\tkey : [");
+                            for(int i = 0; i<16; i++){
+                                printf(" %d", key[i]);
+                            }
+                            printf("]\n");
+                        #endif
+                        // encrypt msg
+                    }else{
+                        #ifdef PHYSEC_DEBUG
+                            printf("\t key : Not found. Regestring fake key :\n");
+                        #endif
+                        // gen key
+                        memset(key, 3, 16*sizeof(uint8_t));
+                        
+                        // register key
+                        peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key);
+
+                        // encrypt msg
+                    }
+                }
+                // n_bytes = lora_send (buf, len, s->sock_base.timeout);
                 break;
             #endif
 

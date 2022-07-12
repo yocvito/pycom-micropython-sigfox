@@ -3001,6 +3001,24 @@ int PHYSEC_quntification(
 
 }
 
+/*
+    key1 will conatin the concatenation of both keys.
+    return value:
+        concatinated key size.
+*/
+int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int key2_size){
+    int key2_kept_part_size = key2_size;
+    int key2_max_size = 128-key1_size;
+    if(key2_max_size>0){
+        if(key2_kept_part_size > key2_max_size){
+            key2_kept_part_size = key2_max_size;
+        }
+        memcpy(key1+key1_size, key2, key2_kept_part_size*sizeof(uint8_t));
+        return key1_size+key2_kept_part_size;
+    }
+    return 128;
+}
+
 #ifdef PHYSEC_DEBUG
 
 void PHYSEC_signal_processing_test(){
@@ -3313,6 +3331,9 @@ static void
 initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 {
     bool generated = false;
+    PHYSEC_Key key = { 0 };
+    int key_len = 0;
+    int last_cnt_before_m_init = 0;
 
     uint8_t n_required = PHYSEC_N_REQUIRED_MEASURE;
     PHYSEC_RssiMsrmts m = {
@@ -3354,24 +3375,29 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 #endif
             
             // store rssi of last probe
-            m.rssi_msrmts[cnt] = rssi;
+            m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
             cnt++;
         }
 
         PHYSEC_Key P = { 0 };
-        m.nb_msrmts = cnt;
+        m.nb_msrmts = cnt - last_cnt_before_m_init;
         int32_t nbits = PHYSEC_quntification(&m, 0.1, P.key);
+        key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
+
+        // init m
+        last_cnt_before_m_init = cnt;
+
 #if PHYSEC_DEBUG
         printf("### QUANTIFICATION DONE\n");
-        printf("nbits = %d\n", nbits);
-        hexdump((uint8_t*) P.key, PHYSEC_KEY_SIZE_BYTES);
+        printf("key_len = %d\n", key_len);
+        hexdump((uint8_t*) key.key, PHYSEC_KEY_SIZE_BYTES);
         printf("\n");
 #endif
 
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
-        if (nbits < PHYSEC_KEY_SIZE)
+        if (key_len < PHYSEC_KEY_SIZE)
         {
-            n_required += 1;
+            n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
             continue;
         }
 
@@ -3415,11 +3441,11 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
             // compute vector and reconciliate
             uint8_t y_A[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-            PHYSEC_craft_reconciliate_vector(y_A, P.key);
+            PHYSEC_craft_reconciliate_vector(y_A, key.key);
             // fill kg_s->cs_vec with y = ybob - yalice
             make_diff_vector(kg_s->cs_vec, y_A, kg_r->cs_vec);
 
-            PHYSEC_reconciliate(kg_s->cs_vec, P.key);     // reconciliated key
+            PHYSEC_reconciliate(kg_s->cs_vec, key.key);     // reconciliated key
 
             PHYSEC_privacy_amplification(&P);
 

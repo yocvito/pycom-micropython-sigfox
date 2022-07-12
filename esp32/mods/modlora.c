@@ -2933,7 +2933,7 @@ int PHYSEC_quntification(
     int8_t rest_bits;
     uint8_t gen_bits;
 
-    while(rssi_window_align_index  < rssi_msermts->nb_msrmts){
+    while(rssi_msermts->nb_msrmts - rssi_window_align_index  >= PHYSEC_QUNTIFICATION_WINDOW_LEN){
 
         // rssi window
         rssi_window = rssi_msermts->rssi_msrmts+rssi_window_align_index;
@@ -4226,15 +4226,21 @@ static int lora_socket_send (mod_network_socket_obj_t *s, const byte *buf, mp_ui
                             }
                             printf("]\n");
                         #endif
+                        // encrypt msg
                     }else{
                         #ifdef PHYSEC_DEBUG
                             printf("\t key : Not found. Regestring fake key :\n");
                         #endif
+                        // gen key
                         memset(key, 3, 16*sizeof(uint8_t));
+                        
+                        // register key
                         peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key);
+
+                        // encrypt msg
                     }
                 }
-                n_bytes = lora_send (buf, len, s->sock_base.timeout);
+                // n_bytes = lora_send (buf, len, s->sock_base.timeout);
                 break;
             #endif
 

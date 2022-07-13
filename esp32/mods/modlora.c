@@ -3002,6 +3002,24 @@ int PHYSEC_quntification(
 
 }
 
+/*
+    key1 will conatin the concatenation of both keys.
+    return value:
+        concatinated key size.
+*/
+int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int key2_size){
+    int key2_kept_part_size = key2_size;
+    int key2_max_size = 128-key1_size;
+    if(key2_max_size>0){
+        if(key2_kept_part_size > key2_max_size){
+            key2_kept_part_size = key2_max_size;
+        }
+        memcpy(key1+key1_size, key2, key2_kept_part_size*sizeof(uint8_t));
+        return key1_size+key2_kept_part_size;
+    }
+    return 128;
+}
+
 #ifdef PHYSEC_DEBUG
 
 void PHYSEC_signal_processing_test(){
@@ -3103,12 +3121,12 @@ void peer_key_list_free(peer_key_list_t pkl){
 }
 
 void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key){
-    
+
     struct peer_key *pk = malloc(sizeof(struct peer_key));
     pk->peer_id = peer_id;
     memcpy(pk->key, key, 16*sizeof(uint8_t));
     pk->next = *pkl;
-    
+
     *pkl = pk;
 
 }
@@ -3119,7 +3137,7 @@ return value:
     1   : peer_id founded and the key is copied in the key_out.
 */
 char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out){
-    
+
     struct peer_key *pk_curr = *pkl;
 
     while(pk_curr != NULL){
@@ -3130,11 +3148,11 @@ char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uin
     }
 
     return 0;
-    
+
 }
 
 void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
-    
+
     struct peer_key *pk_prev = NULL;
     struct peer_key *pk_curr = *pkl;
 
@@ -3154,17 +3172,17 @@ void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
             pk_curr = pk_curr->next;
         }
     }
-    
+
 }
 
 
 // END : Key gen Policy
 
 /**
- * @brief Returns an approximate toa for a specified SF 
- * 
+ * @brief Returns an approximate toa for a specified SF
+ *
  * @param sf    spreading factor used
- * @return uint16_t 
+ * @return uint16_t
  */
 static inline uint16_t
 toa(uint8_t sf)
@@ -3188,9 +3206,9 @@ toa(uint8_t sf)
 
 /**
  * \brief listen on lora interface for incoming packets and returns the first PHYSEC_Packet it catch
- * 
- * \param retbuffer the buffer to be filled with the payload embedded in the physec packet 
- * \param len       the size of the retbuffer (it should be equal to the max payload size) 
+ *
+ * \param retbuffer the buffer to be filled with the payload embedded in the physec packet
+ * \param len       the size of the retbuffer (it should be equal to the max payload size)
  * \param timeout   time before aborting the reception
  * \param start_time pointer to int, will contains the start time just after packet reception
  * \param rssi      pointer to uint8_t, will contains the rssi of the physec packet
@@ -3245,13 +3263,13 @@ wait_physec_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *s
 }
 
 /**
- * \brief wait for the reception of a PHYSEC probe destinated to id 
+ * \brief wait for the reception of a PHYSEC probe destinated to id
  *
  * \param id        the id of the device calling the function
  * \param rssi      the rssi value of the received probe
  * \param duration  time waiting for the probe
  * \param timeout   the time before exiting the listenning mode
- * \return the probe number of the last received probe 
+ * \return the probe number of the last received probe
  */
 static int8_t
 wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
@@ -3336,6 +3354,10 @@ static void
 initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 {
     bool generated = false;
+    PHYSEC_Key key = { 0 };
+    int key_len = 0;
+    int last_cnt_before_m_init = 0;
+    int last_incomplete_window_size;
 
     uint8_t n_required = PHYSEC_N_REQUIRED_MEASURE;
     PHYSEC_RssiMsrmts m = {
@@ -3375,32 +3397,40 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 printf("\n");
 #endif
                 // store rssi of last probe
-                m.rssi_msrmts[cnt] = rssi;
+                m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
                 cnt++;
             }
-            
         }
 
         PHYSEC_Key P = { 0 };
-        m.nb_msrmts = cnt;
-#if PHYSEC_DEBUG   
-        printf("### RSSI BEFORE QUANTIFICATION\n");
-        display_rssi(m.rssi_msrmts, cnt);
-#endif
+        m.nb_msrmts = cnt - last_cnt_before_m_init;
         int32_t nbits = PHYSEC_quntification(&m, 0.1, P.key);
-        printf("### RSSI AFTER QUANTIFICATION\n");
-        display_rssi(m.rssi_msrmts, cnt);
+        key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
+
+        // init m
+        last_incomplete_window_size = cnt % PHYSEC_QUNTIFICATION_WINDOW_LEN;
+        last_cnt_before_m_init = cnt - last_incomplete_window_size;
+        {   // save the last incomplete window
+            int8_t the_last_incomplete_window[last_incomplete_window_size];
+            memcpy(
+                the_last_incomplete_window,
+                m.rssi_msrmts+(m.nb_msrmts-last_incomplete_window_size),
+                last_incomplete_window_size*sizeof(int8_t)
+            );
+            memcpy(m.rssi_msrmts, the_last_incomplete_window, last_incomplete_window_size*sizeof(int8_t));
+        }
+
 #if PHYSEC_DEBUG
         printf("### QUANTIFICATION DONE\n");
-        printf("nbits = %d\n", nbits);
-        hexdump((uint8_t*) P.key, PHYSEC_KEY_SIZE_BYTES);
+        printf("key_len = %d\n", key_len);
+        hexdump((uint8_t*) key.key, PHYSEC_KEY_SIZE_BYTES);
         printf("\n");
 #endif
 
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
-        if (nbits < PHYSEC_KEY_SIZE)
+        if (key_len < PHYSEC_KEY_SIZE)
         {
-            n_required += 10;
+            n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
             continue;
         }
 
@@ -3426,7 +3456,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
         PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen *) buf;
         // check if waiter need more measure
-        if (kg_r->stage == PHYSEC_KGS_RECONCIL) 
+        if (kg_r->stage == PHYSEC_KGS_RECONCIL)
         {
 #if PHYSEC_DEBUG
                 printf("<<< KEYGEN PKT RECEIVED - RECONCILIATION\n");
@@ -3473,8 +3503,8 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
 /**
  * \brief   listen for incomming packet related to PHYSEC key generation, and respond to them in order to generate
- *          a common private key 
- * 
+ *          a common private key
+ *
  * \param k     a pointer to a PHYSEC_Key struct, will be filled by the function in case generation succeed
  * \param sync  a pointer to a synchronisation struct, used to identify packets related to the current key generation process
  */
@@ -3559,11 +3589,11 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 printf("\n");
 #endif
                 // check if enough measure for keygen
-                PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen*) buf; 
+                PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen*) buf;
 
                 if (memcmp(kg_r->dev_id, sync->dev_id, PHYSEC_DEV_ID_LEN) != 0)
                     continue;
-                
+
                 switch (kg_r->stage)
                 {
                     case PHYSEC_KGS_START:
@@ -3581,7 +3611,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                         };
                         PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
                         int32_t nbits;
-#if PHYSEC_DEBUG   
+#if PHYSEC_DEBUG
                         printf("### RSSI BEFORE QUANTIFICATION\n");
                         display_rssi(m.rssi_msrmts, cnt);
 #endif
@@ -3626,7 +3656,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                             sum_delay = 0;
                             kg_s->stage = PHYSEC_KGS_RESET;
                         }
-                        
+
                         memcpy(&(kg_s->dev_id), sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                         lora_send((uint8_t*)&pkt, sizeof(pkt), -1);
 #if PHYSEC_DEBUG
@@ -4557,7 +4587,7 @@ static int lora_socket_send (mod_network_socket_obj_t *s, const byte *buf, mp_ui
                         #endif
                         // gen key
                         memset(key, 3, 16*sizeof(uint8_t));
-                        
+
                         // register key
                         peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key);
 

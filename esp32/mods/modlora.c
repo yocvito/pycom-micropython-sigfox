@@ -3430,7 +3430,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         // init m
         last_incomplete_window_size = cnt % PHYSEC_QUNTIFICATION_WINDOW_LEN;
         last_cnt_before_m_init = cnt - last_incomplete_window_size;
-        {   // save the last incomplete window
+        if(last_incomplete_window_size > 0){   // save the last incomplete window
             int8_t the_last_incomplete_window[last_incomplete_window_size];
             memcpy(
                 the_last_incomplete_window,

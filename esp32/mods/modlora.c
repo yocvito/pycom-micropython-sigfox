@@ -3340,6 +3340,23 @@ PHYSEC_privacy_amplification(PHYSEC_Key *key)
     */
 }
 
+static void
+display_key_bits(const PHYSEC_Key *K)
+{
+    printf("K = ");
+    for (int i=0; i<PHYSEC_KEY_SIZE_BYTES; i++)
+    {
+        for (int j=7; j>=0; j--)
+        {
+            if ((K->key[i] >> j) & 0x1)
+                printf("1");
+            else
+                printf("0");
+        }
+    }
+    printf("\n");
+}
+
 static void display_rssi(int8_t *rssis, uint8_t len)
 {
     printf("[ \n");
@@ -3404,8 +3421,11 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
         PHYSEC_Key P = { 0 };
         m.nb_msrmts = cnt - last_cnt_before_m_init;
+        printf("before quant\n");
         int32_t nbits = PHYSEC_quntification(&m, 0.1, P.key);
+        printf("after quant\n");
         key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
+        printf("after concat\n");
 
         // init m
         last_incomplete_window_size = cnt % PHYSEC_QUNTIFICATION_WINDOW_LEN;
@@ -3420,10 +3440,13 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             memcpy(m.rssi_msrmts, the_last_incomplete_window, last_incomplete_window_size*sizeof(int8_t));
         }
 
+        printf("Before key reconciliation\n");
+
 #if PHYSEC_DEBUG
         printf("### QUANTIFICATION DONE\n");
         printf("key_len = %d\n", key_len);
         hexdump((uint8_t*) key.key, PHYSEC_KEY_SIZE_BYTES);
+        display_key_bits(&P);
         printf("\n");
 #endif
 
@@ -3624,6 +3647,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                             printf("### QUANTIFICATION DONE\n");
                             printf("nbits = %d\n", nbits);
                             hexdump((uint8_t*) P.key, PHYSEC_KEY_SIZE_BYTES);
+                            display_key_bits(&P);
                             printf("\n");
 #endif
                             kg_s->stage = PHYSEC_KGS_RECONCIL;

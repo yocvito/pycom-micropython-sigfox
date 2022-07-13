@@ -3334,6 +3334,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
     PHYSEC_Key key = { 0 };
     int key_len = 0;
     int last_cnt_before_m_init = 0;
+    int last_incomplete_window_size;
 
     uint8_t n_required = PHYSEC_N_REQUIRED_MEASURE;
     PHYSEC_RssiMsrmts m = {
@@ -3385,7 +3386,17 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
 
         // init m
-        last_cnt_before_m_init = cnt;
+        last_incomplete_window_size = cnt % PHYSEC_QUNTIFICATION_WINDOW_LEN;
+        last_cnt_before_m_init = cnt - last_incomplete_window_size;
+        {   // save the last incomplete window
+            int8_t the_last_incomplete_window[last_incomplete_window_size];
+            memcpy(
+                the_last_incomplete_window,
+                m.rssi_msrmts+(m.nb_msrmts-last_incomplete_window_size),
+                last_incomplete_window_size*sizeof(int8_t)
+            );
+            memcpy(m.rssi_msrmts, the_last_incomplete_window, last_incomplete_window_size*sizeof(int8_t));
+        }
 
 #if PHYSEC_DEBUG
         printf("### QUANTIFICATION DONE\n");

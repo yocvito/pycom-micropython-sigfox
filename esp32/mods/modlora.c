@@ -3023,7 +3023,7 @@ static void shift_bits_right(uint8_t *array, int len, int shift) {
 
     uint8_t array_out[len];
     memset(array_out, 0, len);
-    
+
     for(int i = 0; i < len; i++) {
         if(i+macro_shift < len)
             array_out[i+macro_shift] += array[i]>>shift;
@@ -3043,7 +3043,7 @@ int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int ke
         }
 
         shift_bits_right(key2, 16, key1_size);
-        
+
         for(int i = 0; i < 16; i++){
             key1[i]+=key2[i];
         }
@@ -3398,6 +3398,28 @@ static void display_rssi(int8_t *rssis, uint8_t len)
     printf("\n]\n");
 }
 
+static float
+entropy(uint8_t *bits, uint32_t nbits)
+{
+    uint32_t c1 = 0;
+
+    uint32_t nbytes = (nbits % 8) ? nbits / 8 + 1 : nbits / 8;
+
+    for (uint32_t i=0; i < nbits; i++)
+    {
+        if ( (bits[i/8] >> (7-(i%8))) & 0x1 )
+            c1 ++;
+    }
+
+    float p1 = (float)c1 / (float)nbits;
+    float p0 = 1.0 - p1;
+
+    printf("P(X=0) = %f\n", p0);
+    printf("P(X=1) = %f\n", p1);
+
+    return p0 * log2( 1 / p0 ) + p1 * log2(1 / p1);
+}
+
 static void
 initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 {
@@ -3453,7 +3475,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 cnt++;
             }
         }
-        
+
         m.nb_msrmts = cnt - last_cnt_before_m_init;
         last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
         last_cnt_before_m_init = cnt - last_incomplete_window_size;
@@ -3466,7 +3488,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             PHYSEC_RssiMsrmts rssi_msrmts;
             rssi_msrmts.nb_msrmts = m.nb_msrmts-last_incomplete_window_size;
             rssi_msrmts.rssi_msrmts_delay = m.rssi_msrmts_delay;
-            
+
             int8_t msrmts[rssi_msrmts.nb_msrmts];
             rssi_msrmts.rssi_msrmts = msrmts;
             memcpy(rssi_msrmts.rssi_msrmts, m.rssi_msrmts, rssi_msrmts.nb_msrmts*sizeof(int8_t));
@@ -3546,13 +3568,16 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
         //     PHYSEC_reconciliate(diff, P.key);     // reconciliated key
 
-        //     PHYSEC_privacy_amplification(&P);
-
-        //     memcpy(k, &P, sizeof(PHYSEC_Key));
+#if PHYSEC_DEBUG
+        //     printf("Entropy before PA: %f\n", entropy(key.key, key_len));
+#endif
+        //     PHYSEC_privacy_amplification(&k);
+        //     memcpy(k, &key, sizeof(PHYSEC_Key));
 
         //     #if PHYSEC_DEBUG
         //         printf("### KEY GENERATED\n");
         //         hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
+        //         printf("Entropy after PA: %f\n", entropy(key.key, key_len));
         //         printf("\n");
         //     #endif
 
@@ -3566,7 +3591,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         //     #endif
         //     cnt = 0;
         //     last_cnt_before_m_init = 0;
-        //     memset(&key, 0, sizeof(PHYSEC_Key));   
+        //     memset(&key, 0, sizeof(PHYSEC_Key));
         //     n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
         // }
 
@@ -3683,7 +3708,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
 
                 // TMP END
-                
+
                 // // check if enough measure for keygen
                 // PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen*) buf;
 
@@ -3728,8 +3753,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
                 //             #if PHYSEC_DEBUG
                 //                 printf("### CS Vec\n");
-                //                 hexdump((uint8_t*)kg_s->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
+                //                 hexdump((uint8_t*)kg_s->cs_vec, PHYSEC_CS_COMPRESSED_SIZE
                 //                 printf("\n");
+                //                 printf("Key entropy before PA : %f\n", entropy(P.key, nbits));
                 //             #endif
                 //             PHYSEC_privacy_amplification(P.key);
 
@@ -3737,6 +3763,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 //             #if PHYSEC_DEBUG
                 //                 printf("### KEY GENERATED\n");
                 //                 hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
+                //                 printf("Key entropy after PA : %f\n", entropy(P.key, nbits));
                 //                 printf("\n");
                 //             #endif
                 //             generated = true;

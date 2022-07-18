@@ -3388,7 +3388,8 @@ display_key_bits(const PHYSEC_Key *K)
     printf("\n");
 }
 
-static void display_rssi(int8_t *rssis, uint8_t len)
+static void 
+display_rssi(int8_t *rssis, uint8_t len)
 {
     printf("[ \n");
     for (int i=0; i<len; i++)
@@ -3396,6 +3397,25 @@ static void display_rssi(int8_t *rssis, uint8_t len)
         printf("\t%d\n", rssis[i]);
     }
     printf("\n]\n");
+}
+
+static float 
+entropy(uint8_t *bits, uint32_t nbits)
+{
+    uint32_t c1 = 0;
+
+    uint32_t nbytes = (nbits % 8) ? nbits / 8 + 1 : nbits / 8;
+
+    for (uint32_t i=0; i < nbits; i++)
+    {
+        if ( (bits[i/8] >> (7-(i%8))) & 0x1 )
+            c1 ++;
+    }
+
+    float p1 = c1 / nbits;
+    float p0 = 1 - p1;
+
+    return p0 * log2( 1 / p0 ) + p1 * log2(1 / p1);
 }
 
 static void
@@ -3540,6 +3560,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
              #if PHYSEC_DEBUG
                  printf("### KEY GENERATED\n");
                  hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
+                 printf("Key Entropy after PA : %f\n", entropy(k->key, PHYSEC_KEY_SIZE));
                  printf("\n");
              #endif
 
@@ -3694,6 +3715,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                             printf("### CS Vec\n");
                             hexdump((uint8_t*)kg_s->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
                             printf("\n");
+                            printf("Key entropy before PA: %f\n", entropy(P.key, PHYSEC_KEY_SIZE));
 #endif
                             PHYSEC_privacy_amplification(P.key);
 
@@ -3701,6 +3723,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 #if PHYSEC_DEBUG
                             printf("### KEY GENERATED\n");
                             hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
+                            printf("Key entropy after PA: %f\n", entropy(P.key, PHYSEC_KEY_SIZE));
                             printf("\n");
 #endif
                             generated = true;
@@ -3727,16 +3750,6 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                         break;
                     }
                 }
-
-                // calculate delay_avg
-
-                // generate key
-
-                // check if we generated enough bits
-
-                // send reconciliation packet
-
-                // privacy amplification
 
                 break;
             }

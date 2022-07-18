@@ -65,7 +65,7 @@
  *  PHYSEC includes
  */
 #include "str_utils.h"
-#include "extmod/crypto-algorithms/sha256.h"
+#include "extmod/crypto-algorithms/sha256.c"
 #include <math.h>
 
 #include "random.h"
@@ -3304,7 +3304,7 @@ wait_physec_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *s
  * \param timeout   the time before exiting the listenning mode
  * \return the probe number of the last received probe
  */
-static int8_t
+static uint8_t
 wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
 {
     uint32_t start = mp_hal_ticks_ms();
@@ -3363,14 +3363,12 @@ PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
 static void
 PHYSEC_privacy_amplification(PHYSEC_Key *key)
 {
-    /*
     CRYAL_SHA256_CTX ctx =  { 0 };
     sha256_init(&ctx);
     sha256_update(&ctx, (BYTE*) key->key, PHYSEC_KEY_SIZE_BYTES);
     uint8_t hash[32] = { 0 };
     sha256_final(&ctx, hash);
     memcpy(key->key, hash, PHYSEC_KEY_SIZE_BYTES); // truncate hash
-    */
 }
 
 static void
@@ -3450,17 +3448,19 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 printf("\n");
             #endif
                 // store rssi of last probe
+                printf("%d\n", cnt-last_cnt_before_m_init);
                 m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
                 cnt++;
             }
         }
         m.nb_msrmts = cnt - last_cnt_before_m_init;
 
+        display_rssi(m.rssi_msrmts, m.nb_msrmts);
         nbits = PHYSEC_quntification(&m, 0.1, P.key);
         key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
 
         // init m
-        last_incomplete_window_size = cnt % PHYSEC_QUNTIFICATION_WINDOW_LEN;
+        last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
         last_cnt_before_m_init = cnt - last_incomplete_window_size;
         if(last_incomplete_window_size > 0){
             // save the last incomplete window
@@ -3489,71 +3489,73 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         #endif
 
         // to delete this :
-            generated = true;
+            //generated = true;
         // when uncommenting this :
 
-        // // send reconciliation begin packet
-        // PHYSEC_Packet pkt = {
-        //     .identifier = PHYSEC_PKT_IDENTIFIER,
-        //     .type = PHYSEC_PT_KEYGEN,
-        //     .payload = { 0 }
-        // };
-        // PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
-        // kg_s->stage = (uint8_t) PHYSEC_KGS_START;
-        // memcpy(kg_s->dev_id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+         // send reconciliation begin packet
+         PHYSEC_Packet pkt = {
+             .identifier = PHYSEC_PKT_IDENTIFIER,
+             .type = PHYSEC_PT_KEYGEN,
+             .payload = { 0 }
+         };
+         PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
+         kg_s->stage = (uint8_t) PHYSEC_KGS_START;
+         memcpy(kg_s->dev_id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
 
-        // lora_send((uint8_t*) &pkt, sizeof(pkt), -1);
-        // #if PHYSEC_DEBUG
-        //     printf(">>> KGS START PKT SENT\n");
-        //     printf("\n");
-        // #endif
+         lora_send((uint8_t*) &pkt, sizeof(pkt), -1);
+         #if PHYSEC_DEBUG
+             printf(">>> KGS START PKT SENT\n");
+             printf("\n");
+         #endif
 
-        // // wait for KEYGEN packet
-        // uint8_t buf[PHYSEC_KEYGEN_PAYLOAD_SIZE] = { 0 };
-        // while (wait_physec_packet(buf, sizeof(buf), 5000, NULL, NULL) != PHYSEC_PT_KEYGEN);
+         // wait for KEYGEN packet
+         uint8_t buf[PHYSEC_KEYGEN_PAYLOAD_SIZE] = { 0 };
+         while (wait_physec_packet(buf, sizeof(buf), 5000, NULL, NULL) != PHYSEC_PT_KEYGEN);
 
-        // PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen *) buf;
-        // // check if waiter need more measure
-        // if (kg_r->stage == PHYSEC_KGS_RECONCIL)
-        // {
-        //     #if PHYSEC_DEBUG
-        //         printf("<<< KEYGEN PKT RECEIVED - RECONCILIATION\n");
-        //         printf("VS vec:\n");
-        //         hexdump(kg_r->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
-        //         printf("\n");
-        //     #endif
+         PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen *) buf;
+         // check if waiter need more measure
+         if (kg_r->stage == PHYSEC_KGS_RECONCIL)
+         {
+             #if PHYSEC_DEBUG
+                 printf("<<< KEYGEN PKT RECEIVED - RECONCILIATION\n");
+                 printf("VS vec:\n");
+                 hexdump(kg_r->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
+                 printf("\n");
+             #endif
 
 
-        //     // compute vector and reconciliate
-        //     uint8_t y_A[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-        //     uint8_t diff[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-        //     PHYSEC_craft_reconciliate_vector(y_A, P.key);
-        //     // fill kg_s->cs_vec with y = ybob - yalice
-        //     make_diff_vector(kg_s->cs_vec, y_A, kg_r->cs_vec);
+             // compute vector and reconciliate
+             uint8_t y_A[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
+             uint8_t diff[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
+             PHYSEC_craft_reconciliate_vector(y_A, P.key);
+             // fill kg_s->cs_vec with y = ybob - yalice
+             make_diff_vector(kg_s->cs_vec, y_A, kg_r->cs_vec);
 
-        //     PHYSEC_reconciliate(diff, P.key);     // reconciliated key
+             PHYSEC_reconciliate(diff, P.key);     // reconciliated key
 
-        //     PHYSEC_privacy_amplification(&P);
+             PHYSEC_privacy_amplification(&P);
 
-        //     memcpy(k, &P, sizeof(PHYSEC_Key));
+             memcpy(k, &P, sizeof(PHYSEC_Key));
 
-        //     #if PHYSEC_DEBUG
-        //         printf("### KEY GENERATED\n");
-        //         hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
-        //         printf("\n");
-        //     #endif
+             #if PHYSEC_DEBUG
+                 printf("### KEY GENERATED\n");
+                 hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
+                 printf("\n");
+             #endif
 
-        //         generated = true;
-        // }
-        // else if (kg_r->stage == PHYSEC_KGS_RESET && memcmp(kg_r->dev_id, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0)
-        // {
-        //     #if PHYSEC_DEBUG
-        //         printf("<<< KEYGEN PKT RECEIVED - MEASURE RESET\n");
-        //         printf("\n");
-        //     #endif
-        //     cnt = 0;
-        //     n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
-        // }
+                 generated = true;
+         }
+         else if (kg_r->stage == PHYSEC_KGS_RESET && memcmp(kg_r->dev_id, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0)
+         {
+             #if PHYSEC_DEBUG
+                 printf("<<< KEYGEN PKT RECEIVED - MEASURE RESET\n");
+                 printf("\n");
+             #endif
+             cnt = 0;
+             last_cnt_before_m_init = 0;
+             memset(&key, 0, sizeof(PHYSEC_Key));   
+             n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
+         }
 
     }
 
@@ -4428,7 +4430,7 @@ lora_privacy_amplification(mp_obj_t self, mp_obj_t P){
 
     return mp_obj_new_str(&(K.key), 16);
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_privacy_amplification_obj, lora_privacy_amplification);
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_privacy_amplification_obj, lora_privacy_amplification);
 #endif
 
 STATIC const mp_map_elem_t lora_locals_dict_table[] = {

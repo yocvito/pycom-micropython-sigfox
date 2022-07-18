@@ -210,6 +210,13 @@ APP_MODS_LORA_SRC_C = $(addprefix mods/,\
 	modlora.c \
 	)
 
+ifeq ($(PHYSEC_ENABLED), 1)
+APP_MODS_LORA_SRC_C += $(addprefix extmod/crypto-algorithms/,\
+	sha256.c \
+	)
+
+endif
+
 APP_STM_SRC_C = $(addprefix ports/stm32/,\
 	bufhelper.c \
 	)

@@ -3388,7 +3388,8 @@ display_key_bits(const PHYSEC_Key *K)
     printf("\n");
 }
 
-static void display_rssi(int8_t *rssis, uint8_t len)
+static void
+display_rssi(int8_t *rssis, uint8_t len)
 {
     printf("[ \n");
     for (int i=0; i<len; i++)
@@ -3465,10 +3466,10 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             uint32_t wtime = 0;
             if ( wait_probe(sync->dev_id, &rssi, &wtime, PHYSEC_PROBE_TIMEOUT) == cnt && wtime < PHYSEC_PROBE_TIMEOUT)
             {
-                #if PHYSEC_DEBUG
-                    printf("<<< PROBE ANSWER RECEIVED\n");
-                    printf("\n");
-                #endif
+            #if PHYSEC_DEBUG
+                printf("<<< PROBE ANSWER RECEIVED\n");
+                printf("\n");
+            #endif
                 // store rssi of last probe
                 printf("%d\n", cnt-last_cnt_before_m_init);
                 m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
@@ -3477,8 +3478,6 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         }
 
         m.nb_msrmts = cnt - last_cnt_before_m_init;
-        last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
-        last_cnt_before_m_init = cnt - last_incomplete_window_size;
 
         #ifdef PHYSEC_DEBUG
             display_rssi(m.rssi_msrmts, m.nb_msrmts);
@@ -3498,6 +3497,8 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         }
 
         // init m
+        last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
+        last_cnt_before_m_init = cnt - last_incomplete_window_size;
         if(last_incomplete_window_size > 0){
             // save the last incomplete window
             int8_t the_last_incomplete_window[last_incomplete_window_size];
@@ -3613,7 +3614,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 {
     bool generated = false;
 
-    // uint8_t n_required = PHYSEC_N_REQUIRED_MEASURE  ;
+    uint8_t n_required = PHYSEC_N_REQUIRED_MEASURE  ;
     PHYSEC_RssiMsrmts m = {
         .nb_msrmts = 0,
         .rssi_msrmts = malloc(sizeof(int8_t) * PHYSEC_N_MAX_MEASURE), // alloc failure is already caught by micro python
@@ -3636,11 +3637,11 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             case PHYSEC_PT_PROBE:
             {
                 PHYSEC_Probe *probe = (PHYSEC_Probe*) buf;
-                #if PHYSEC_DEBUG
-                    printf("<<< PROBE REQUEST RECEIVED\n");
-                    hexdump((uint8_t*) probe, sizeof(PHYSEC_Probe));
-                    printf("\n");
-                #endif
+#if PHYSEC_DEBUG
+                printf("<<< PROBE REQUEST RECEIVED\n");
+                hexdump((uint8_t*) probe, sizeof(PHYSEC_Probe));
+                printf("\n");
+#endif
 
                 // verify probe
                 if (memcmp(probe->id, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0)
@@ -3666,10 +3667,10 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                         response->cnt = cnt;
                         memcpy(response->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                         lora_send((uint8_t*) &pkt, sizeof(pkt), 0);
-                        #if PHYSEC_DEBUG
-                            printf(">>> PROBE ANS SENT\n");
-                            printf("\n");
-                        #endif
+#if PHYSEC_DEBUG
+                        printf(">>> PROBE ANS SENT\n");
+                        printf("\n");
+#endif
 
 
                         last_delay = (mp_hal_ticks_ms()-start) + toa(lora_obj.sf);
@@ -3684,28 +3685,81 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             case PHYSEC_PT_KEYGEN:
             {
 
-                #if PHYSEC_DEBUG
-                    printf("<<< KGS PKT RECEIVED\n");
-                    printf("\n");
-                #endif
+#if PHYSEC_DEBUG
+                printf("<<< KGS PKT RECEIVED\n");
+                printf("\n");
+#endif
+                // check if enough measure for keygen
+                PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen*) buf;
 
-                // TMP
+                if (memcmp(kg_r->dev_id, sync->dev_id, PHYSEC_DEV_ID_LEN) != 0)
+                    continue;
 
-                display_rssi(m.rssi_msrmts, m.nb_msrmts);
+                switch (kg_r->stage)
+                {
+                    case PHYSEC_KGS_START:
+                    {
+                        memset(&P, 0, sizeof(PHYSEC_Key));
 
-                PHYSEC_Key key = { 0 };
-                int key_len = 0;
-                key_len = PHYSEC_quntification(&m, 0.1, key.key);
-                generated = true;
+                        m.rssi_msrmts_delay = (sum_delay / cnt) / (PHYSEC_PROBE_TIMEOUT + toa(lora_obj.sf));
+                        m.nb_msrmts = cnt;
 
-                #if PHYSEC_DEBUG
-                    printf("### QUANTIFICATION DONE\n");
-                    printf("key_len = %d\n", key_len);
-                    hexdump((uint8_t*) key.key, PHYSEC_KEY_SIZE_BYTES);
-                    display_key_bits(&key);
-                    printf("\n");
-                #endif
+                        // generate key
+                        PHYSEC_Packet pkt = {
+                            .identifier = PHYSEC_PKT_IDENTIFIER,
+                            .type = PHYSEC_PT_KEYGEN,
+                            .payload = { 0 }
+                        };
+                        PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
+                        int32_t nbits;
+#if PHYSEC_DEBUG
+                        printf("### RSSI BEFORE QUANTIFICATION\n");
+                        display_rssi(m.rssi_msrmts, cnt);
+#endif
+                        // if we did not get enough bits, we reset measurements
+                        if ((nbits = PHYSEC_quntification(&m, 0.1, P.key)) >= PHYSEC_KEY_SIZE)
+                        {
+#if PHYSEC_DEBUG
+                            printf("### RSSI AFTER QUANTIFICATION\n");
+                            display_rssi(m.rssi_msrmts, cnt);
+                            printf("### QUANTIFICATION DONE\n");
+                            printf("nbits = %d\n", nbits);
+                            hexdump((uint8_t*) P.key, PHYSEC_KEY_SIZE_BYTES);
+                            display_key_bits(&P);
+                            printf("\n");
+#endif
+                            kg_s->stage = PHYSEC_KGS_RECONCIL;
+                            PHYSEC_craft_reconciliate_vector(kg_s->cs_vec, P.key);
 
+#if PHYSEC_DEBUG
+                            printf("### CS Vec\n");
+                            hexdump((uint8_t*)kg_s->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
+                            printf("\n");
+                            printf("Key entropy before PA: %f\n", entropy(P.key, PHYSEC_KEY_SIZE));
+#endif
+                            PHYSEC_privacy_amplification(P.key);
+
+                            memcpy(k, &P, sizeof(PHYSEC_Key));
+#if PHYSEC_DEBUG
+                            printf("### KEY GENERATED\n");
+                            hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
+                            printf("Key entropy after PA: %f\n", entropy(P.key, PHYSEC_KEY_SIZE));
+                            printf("\n");
+#endif
+                            generated = true;
+                        }
+                        else
+                        {
+#if PHYSEC_DEBUG
+                            printf("### QUANTIFICATION FAILED\n");
+                            printf("nbits = %d\n", nbits);
+                            hexdump((uint8_t*) P.key, PHYSEC_KEY_SIZE_BYTES);
+                            printf("\n");
+#endif
+                            cnt = 0;
+                            sum_delay = 0;
+                            kg_s->stage = PHYSEC_KGS_RESET;
+                        }
 
                 // TMP END
 

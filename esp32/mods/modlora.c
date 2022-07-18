@@ -3023,7 +3023,7 @@ static void shift_bits_right(uint8_t *array, int len, int shift) {
 
     uint8_t array_out[len];
     memset(array_out, 0, len);
-    
+
     for(int i = 0; i < len; i++) {
         if(i+macro_shift < len)
             array_out[i+macro_shift] += array[i]>>shift;
@@ -3043,7 +3043,7 @@ int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int ke
         }
 
         shift_bits_right(key2, 16, key1_size);
-        
+
         for(int i = 0; i < 16; i++){
             key1[i]+=key2[i];
         }
@@ -3388,7 +3388,7 @@ display_key_bits(const PHYSEC_Key *K)
     printf("\n");
 }
 
-static void 
+static void
 display_rssi(int8_t *rssis, uint8_t len)
 {
     printf("[ \n");
@@ -3399,7 +3399,7 @@ display_rssi(int8_t *rssis, uint8_t len)
     printf("\n]\n");
 }
 
-static float 
+static float
 entropy(uint8_t *bits, uint32_t nbits)
 {
     uint32_t c1 = 0;
@@ -3412,8 +3412,11 @@ entropy(uint8_t *bits, uint32_t nbits)
             c1 ++;
     }
 
-    float p1 = c1 / nbits;
-    float p0 = 1 - p1;
+    float p1 = (float)c1 / (float)nbits;
+    float p0 = 1.0 - p1;
+
+    printf("P(X=0) = %f\n", p0);
+    printf("P(X=1) = %f\n", p1);
 
     return p0 * log2( 1 / p0 ) + p1 * log2(1 / p1);
 }
@@ -3574,7 +3577,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
              #endif
              cnt = 0;
              last_cnt_before_m_init = 0;
-             memset(&key, 0, sizeof(PHYSEC_Key));   
+             memset(&key, 0, sizeof(PHYSEC_Key));
              n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
          }
 

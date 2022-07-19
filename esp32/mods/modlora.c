@@ -197,8 +197,8 @@ typedef enum {
 
 #define PHYSEC_PKT_IDENTIFIER       (uint16_t) 0xe4b9
 
-#define PHYSEC_N_MAX_MEASURE        255
-#define PHYSEC_N_REQUIRED_MEASURE   22
+#define PHYSEC_N_MAX_MEASURE        65536
+#define PHYSEC_N_REQUIRED_MEASURE   20
 // 128 bits = 16 bytes = a 16-char-table.
 // For now, if this value is changed, the code will not going to adapt.
 #define PHYSEC_KEY_SIZE             128
@@ -241,7 +241,7 @@ typedef struct _PHYSEC_RssiMsrmts {
 typedef struct _PHYSEC_Sync {
     uint8_t dev_id[PHYSEC_DEV_ID_LEN];
     uint8_t rmt_dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t cnt;
+    uint16_t cnt;
 } PHYSEC_Sync;
 
 /***
@@ -266,7 +266,7 @@ typedef struct _PHYSEC_packet {
 
 typedef struct _PHYSEC_probe {
     uint8_t id[PHYSEC_DEV_ID_LEN];
-    uint8_t cnt;
+    uint16_t cnt;
 } PHYSEC_Probe;
 
 enum {
@@ -2726,7 +2726,7 @@ void PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
     int8_t delta_rssi;
     float rssi_err;
 
-    if(rssi_msermts->nb_msrmts > 0 && rssi_msermts->rssi_msrmts_delay > 0){
+    if(rssi_msermts->nb_msrmts > 0 && rssi_msermts->rssi_msrmts_delay > 0.0){
 
         interpolated_rssi_msrmts[0] = rssi_msermts->rssi_msrmts[0];
 
@@ -2736,10 +2736,10 @@ void PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
             interpolated_rssi_msrmts[i] = rssi_msermts->rssi_msrmts[i] - rssi_err;
         }
 
-    }
+        rssi_msermts->rssi_msrmts_delay = 0;
+        memcpy(rssi_msermts->rssi_msrmts, interpolated_rssi_msrmts, rssi_msermts->nb_msrmts*sizeof(int8_t));
 
-    rssi_msermts->rssi_msrmts_delay = 0;
-    memcpy(rssi_msermts->rssi_msrmts, interpolated_rssi_msrmts, rssi_msermts->nb_msrmts*sizeof(int8_t));
+    }
 
 }
 
@@ -3313,7 +3313,7 @@ wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
     uint8_t buf[PHYSEC_MAX_PAYLOAD_SIZE] = { 0 };
     uint8_t pt = PHYSEC_PT_NONE;
     int32_t wtime = 0;
-    uint8_t cnt = 0;
+    uint16_t cnt = 0;
     int8_t rss = 0;
     while ( true )
     {
@@ -3410,13 +3410,13 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
     PHYSEC_Key P;
     int32_t nbits;
 
-    uint8_t n_required = PHYSEC_N_REQUIRED_MEASURE;
+    uint16_t n_required = PHYSEC_N_REQUIRED_MEASURE;
     PHYSEC_RssiMsrmts m = {
         .nb_msrmts = 0,
         .rssi_msrmts = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t)), // alloc failure is already caught by micro python
         .rssi_msrmts_delay = 0
     };
-    uint8_t cnt = 0;
+    uint16_t cnt = 0;
 
     while ( !generated )
     {
@@ -3490,6 +3490,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
         if (key_len < PHYSEC_KEY_SIZE)
         {
+            printf("generated bits %d/128 with %d measures\n", key_len, cnt);
             n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
             continue;
         }
@@ -3597,7 +3598,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
     uint32_t sum_delay = 0;
     uint32_t last_delay = 0;
-    uint8_t last_cnt = 255;
+    uint16_t last_cnt = 255;
     uint8_t cnt = 0;
     PHYSEC_Key P = { .key = { 0 } };
 
@@ -4417,8 +4418,6 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_wait_rssi_measure_obj, lora_wait_rssi_meas
 STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
-
-    PHYSEC_signal_processing_test();
 
     printf("---------- < PHYSEC sandbox < -----------\n");
 

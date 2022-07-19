@@ -208,7 +208,7 @@ typedef enum {
 #define PHYSEC_CS_COMPRESSED_SIZE   35
 
 #define PHYSEC_DEV_ID_LEN           4
-#define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1
+#define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+2 // cnt is 2 bytes
 #define PHYSEC_KEYGEN_PAYLOAD_SIZE  1+PHYSEC_DEV_ID_LEN+PHYSEC_CS_COMPRESSED_SIZE
 #define PHYSEC_MAX_PAYLOAD_SIZE     PHYSEC_KEYGEN_PAYLOAD_SIZE
 // should be equal to sizeof(PHYSEC_packet)
@@ -3304,7 +3304,7 @@ wait_physec_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *s
  * \param timeout   the time before exiting the listenning mode
  * \return the probe number of the last received probe
  */
-static uint8_t
+static uint16_t
 wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
 {
     uint32_t start = mp_hal_ticks_ms();
@@ -3427,8 +3427,8 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
     bool generated = false;
     PHYSEC_Key key = { 0 };
     int key_len = 0;
-    int last_cnt_before_m_init = 0;
-    int last_incomplete_window_size;
+    uint16_t last_cnt_before_m_init = 0;
+    uint16_t last_incomplete_window_size;
 
     PHYSEC_Key P;
     int32_t nbits;
@@ -3458,6 +3458,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             #if PHYSEC_DEBUG
                 printf(">>> PROBE SENT\n");
                 hexdump((uint8_t*)probe, sizeof(PHYSEC_Probe));
+                printf("probe->cnt=%d, cnt=%d\n", probe->cnt, cnt);
                 printf("\n");
             #endif
 
@@ -3471,13 +3472,14 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 printf("\n");
             #endif
                 // store rssi of last probe
-                printf("%d\n", cnt-last_cnt_before_m_init);
                 m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
                 cnt++;
             }
         }
 
         m.nb_msrmts = cnt - last_cnt_before_m_init;
+        last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
+        last_cnt_before_m_init = cnt - last_incomplete_window_size;
 
         #ifdef PHYSEC_DEBUG
             display_rssi(m.rssi_msrmts, m.nb_msrmts);
@@ -3497,8 +3499,6 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         }
 
         // init m
-        last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
-        last_cnt_before_m_init = cnt - last_incomplete_window_size;
         if(last_incomplete_window_size > 0){
             // save the last incomplete window
             int8_t the_last_incomplete_window[last_incomplete_window_size];
@@ -3625,7 +3625,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
     uint32_t sum_delay = 0;
     uint32_t last_delay = 0;
     uint16_t last_cnt = 255;
-    uint8_t cnt = 0;
+    uint16_t cnt = 0;
     PHYSEC_Key P = { .key = { 0 } };
 
     while ( !generated )
@@ -3641,6 +3641,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 #if PHYSEC_DEBUG
                 printf("<<< PROBE REQUEST RECEIVED\n");
                 hexdump((uint8_t*) probe, sizeof(PHYSEC_Probe));
+                printf("probe->cnt=%d, cnt=%d\n", probe->cnt, cnt);
                 printf("\n");
 #endif
 
@@ -3762,6 +3763,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                             kg_s->stage = PHYSEC_KGS_RESET;
                         }
 
+                        break;
+                    }
+
                 // TMP END
 
                 // // check if enough measure for keygen
@@ -3856,7 +3860,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
                 // // privacy amplification
 
-                break;
+                }
             }
             default:
                 break;

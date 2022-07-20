@@ -272,13 +272,13 @@ typedef struct _PHYSEC_packet {
 typedef struct _PHYSEC_probe {
     uint8_t id[PHYSEC_DEV_ID_LEN];
     uint16_t cnt;
-} PHYSEC_Probe;
+} __attribute__((packed)) PHYSEC_Probe;
 
 typedef struct _PHYSEC_keygen {
     uint8_t dev_id[PHYSEC_DEV_ID_LEN];
     uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
     uint8_t MAC[PHYSEC_CS_MAC_SIZE];
-} PHYSEC_KeyGen;
+} __attribute__((__packed__)) PHYSEC_KeyGen;
 
 typedef struct _PHYSEC_Key {
     uint8_t key[PHYSEC_KEY_SIZE_BYTES];
@@ -3361,7 +3361,7 @@ make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs
 }
 
 static void
-PHYSEC_reconciliate(const uint8_t *diff_vec, PHYSEC_Key *k)
+PHYSEC_reconciliate(const int8_t *diff_vec, PHYSEC_Key *k)
 {
     for (int i=0; i<PHYSEC_KEY_SIZE; i++)
     {

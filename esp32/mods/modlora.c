@@ -3334,6 +3334,26 @@ wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
     return cnt;
 }
 
+typedef struct _matrix {
+    uint8_t nrows;
+    uint8_t ncols;
+    uint8_t **content;
+} matrix;
+
+
+static void
+mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
+{
+    memset(ret, 0, sizeof(uint8_t) * A->nrows);
+    for (int i=0; i < A->nrows; i++)
+    {
+        for (int j=0; j < A->ncols; j++)
+        {
+            ret[i] += A[i][j] * vec[i];
+        }
+    }
+}
+
 static void
 make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs_vec)
 {
@@ -3343,12 +3363,37 @@ make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs
 static void
 PHYSEC_reconciliate(const uint8_t *diff_vec, PHYSEC_Key *k)
 {
+    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
+    {
+        if (diff_vec[i] == 1)
+        {
+            k->key[i/8] |= (1 << (7-(i%8)));
+        }
+        else if (diff_vec[i] == -1)
+        {
+            k->key[i/8] &= ~(1 << (7-(i%8)));
+        }
+    }
 }
 
 static void
 PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
 {
+    uint8_t k_vec[PHYSEC_KEY_SIZE] = { 0 };
+    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
+    {
+        k_vec[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
+    }
 
+    matrix A = {
+        .ncols = PHYSEC_KEY_SIZE,
+        .nrows = PHYSEC_CS_COMPRESSED_SIZE,
+        .content = malloc( PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t*))
+    };
+    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++)
+        A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
+
+    mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);   
 }
 
 static void

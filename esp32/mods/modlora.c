@@ -67,6 +67,8 @@
 #include "str_utils.h"
 #include "extmod/crypto-algorithms/sha256.c"
 #include <math.h>
+#include "lora/system/crypto/cmac.h"
+
 
 #include "random.h"
 /******************************************************************************
@@ -207,6 +209,7 @@ typedef enum {
 #define PHYSEC_KEY_SIZE_BYTES       (int16_t) PHYSEC_KEY_SIZE / 8
 
 #define PHYSEC_CS_COMPRESSED_SIZE   35
+#define PHYSEC_CS_MAC_SIZE          16
 
 #define PHYSEC_DEV_ID_LEN           4
 #define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+2 // cnt is 2 bytes
@@ -274,6 +277,7 @@ typedef struct _PHYSEC_probe {
 typedef struct _PHYSEC_keygen {
     uint8_t dev_id[PHYSEC_DEV_ID_LEN];
     uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
+    uint8_t MAC[PHYSEC_CS_MAC_SIZE];
 } PHYSEC_KeyGen;
 
 typedef struct _PHYSEC_Key {
@@ -3339,7 +3343,6 @@ make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs
 static void
 PHYSEC_reconciliate(const uint8_t *diff_vec, PHYSEC_Key *k)
 {
-
 }
 
 static void
@@ -3402,6 +3405,35 @@ entropy(uint8_t *bits, uint32_t nbits)
     float p0 = 1.0 - p1;
 
     return p0 * log2( 1 / p0 ) + p1 * log2(1 / p1);
+}
+
+/**
+ * @brief Fill MAC field of a PHYSEC_KeyGen struct regarding the content of the KeyGen payload (ID + CS_VEC)
+ * 
+ * @param K  the key to use to generate the MAC
+ * @param kg the PHYSEC_KeyGen structure to work on 
+ */
+static void 
+compute_CS_MAC(const PHYSEC_Key *K, PHYSEC_KeyGen *kg)
+{
+    AES_CMAC_CTX ctx;
+    AES_CMAC_Init(&ctx);
+    AES_CMAC_SetKey(&ctx, K->key);
+    AES_CMAC_Update(&ctx, (const uint8_t*) kg, sizeof(PHYSEC_KeyGen)-PHYSEC_CS_MAC_SIZE);
+    AES_CMAC_Final(kg->MAC, &ctx);
+}
+
+static bool
+verify_CS_MAC(const PHYSEC_Key *K, const PHYSEC_KeyGen *kg)
+{
+    PHYSEC_KeyGen tmp = { 0 };
+    memcpy(&tmp, kg, sizeof(PHYSEC_KeyGen)-PHYSEC_CS_MAC_SIZE);
+    compute_CS_MAC(K, &tmp);
+
+    hexdump(tmp.MAC, 16);
+    hexdump(kg->MAC, 16);
+
+    return (memcmp(tmp.MAC, kg->MAC, PHYSEC_CS_MAC_SIZE) == 0);
 }
 
 static void
@@ -3554,7 +3586,12 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 #if PHYSEC_DEBUG
             printf("Entropy before PA: %f\n", entropy(key.key, key_len));
 #endif
+
+            if ( !verify_CS_MAC(&key, kg_r) )
+                continue;
+
             PHYSEC_privacy_amplification(&key);
+
             memcpy(k, &key, sizeof(PHYSEC_Key));
 
 #if PHYSEC_DEBUG
@@ -3578,6 +3615,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 cnt = 0;
                 last_cnt_before_m_init = 0;
                 memset(&key, 0, sizeof(PHYSEC_Key));
+                key_len = 0;
                 n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
             }
         }
@@ -3672,6 +3710,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 printf("<<< KEYGEN PKT RECEIVED\n");
                 printf("\n");
 #endif
+                if (cnt == 0)
+                    continue;
+
                 // check if enough measure for keygen
                 PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen*) buf;
 
@@ -3695,6 +3736,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 printf("### RSSI BEFORE QUANTIFICATION\n");
                 display_rssi(m.rssi_msrmts, cnt);
 #endif
+                memcpy(&(kg_s->dev_id), sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                 // if we did not get enough bits, we reset measurements
                 if ((nbits = PHYSEC_quntification(&m, 0.1, P.key)) >= PHYSEC_KEY_SIZE)
                 {
@@ -3708,6 +3750,8 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                     printf("\n");
 #endif
                     PHYSEC_craft_reconciliate_vector(kg_s->cs_vec, (const PHYSEC_Key*) &P);
+
+                    compute_CS_MAC(&P, kg_s);
 
                     PHYSEC_privacy_amplification(&P);
 
@@ -3733,7 +3777,6 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                     pkt.type = PHYSEC_PT_RESET;
 
                 }
-                memcpy(&(kg_s->dev_id), sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                 lora_send((uint8_t*)&pkt, sizeof(pkt), -1);
 #if PHYSEC_DEBUG
                 printf(">>> KGS PKT SENT\n");

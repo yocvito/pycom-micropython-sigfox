@@ -2861,20 +2861,18 @@ int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
 
 int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
 
-    double entropy = 0;
+    double negatif_entropy = 0;
     double proba;
     int8_t nbr_bit;
 
     for(int i = 0; i < d->bin_nbr; i++){
         proba = d->values[i] * d->bins[i];
         if(proba>0){
-            entropy +=  proba*log2(proba);
+            negatif_entropy +=  proba*log2(proba);
         }
     }
 
-    nbr_bit = (int8_t) (-entropy);
-
-    return pow(2,nbr_bit);
+    return (int8_t) pow(2.0,-negatif_entropy);
 }
 
 /*

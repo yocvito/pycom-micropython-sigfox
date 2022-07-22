@@ -263,6 +263,10 @@ typedef enum _PHYSEC_packet_type {
     PHYSEC_PT_MAX = 255
 } PHYSEC_PacketType;
 
+typedef struct _PHYSEC_Key {
+    uint8_t key[PHYSEC_KEY_SIZE_BYTES];
+} PHYSEC_Key;
+
 typedef struct _PHYSEC_packet {
     uint16_t identifier;        // identifies a PHYSEC packet
     uint8_t type;
@@ -276,13 +280,11 @@ typedef struct _PHYSEC_probe {
 
 typedef struct _PHYSEC_keygen {
     uint8_t dev_id[PHYSEC_DEV_ID_LEN];
-    uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
+    //uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
+    PHYSEC_Key K;
     uint8_t MAC[PHYSEC_CS_MAC_SIZE];
 } __attribute__((__packed__)) PHYSEC_KeyGen;
 
-typedef struct _PHYSEC_Key {
-    uint8_t key[PHYSEC_KEY_SIZE_BYTES];
-} PHYSEC_Key;
 
 struct density {
     int8_t q_0;
@@ -3347,7 +3349,7 @@ mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
     {
         for (int j=0; j < A->ncols; j++)
         {
-            ret[i] += A[i][j] * vec[i];
+            ret[i] += A->content[i][j] * vec[i];
         }
     }
 }
@@ -3355,7 +3357,8 @@ mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
 static void
 make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs_vec)
 {
-
+    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
+        diff_vec[i] = 0;
 }
 
 static void
@@ -3375,6 +3378,48 @@ PHYSEC_reconciliate(const int8_t *diff_vec, PHYSEC_Key *k)
 }
 
 static void
+display_key_bits(const PHYSEC_Key *K)
+{
+    for (int i=0; i<PHYSEC_KEY_SIZE_BYTES; i++)
+    {
+        for (int j=7; j>=0; j--)
+        {
+            if ((K->key[i] >> j) & 0x1)
+                printf("1");
+            else
+                printf("0");
+        }
+    }
+    printf("\n");
+}
+
+static void
+PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
+{
+    PHYSEC_Key tmp = { 0 };
+    printf("dif: ");
+    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
+    {
+        uint8_t cur_kb_bit = (KB->key[i/8] >> (7-(i%8))) & 0x1;
+        uint8_t cur_ka_bit = (KA->key[i/8] >> (7-(i%8))) & 0x1;
+        if ( cur_kb_bit != cur_ka_bit)
+        {
+            printf("V");
+            tmp.key[i/8] |= (1 << (7-(i%8)));
+        }
+        else {
+            printf(" ");
+        }
+    }
+    printf("\nKB = ");
+    display_key_bits(KB);
+    printf("KA = ");
+    display_key_bits(KA);
+
+    memcpy(KA, KB, sizeof(PHYSEC_Key));
+}
+
+static void
 PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
 {
     uint8_t k_vec[PHYSEC_KEY_SIZE] = { 0 };
@@ -3391,6 +3436,8 @@ PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
     for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++)
         A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
 
+    // set matrix A to random bernoulli
+
     mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);   
 }
 
@@ -3406,27 +3453,10 @@ PHYSEC_privacy_amplification(PHYSEC_Key *key)
 }
 
 static void
-display_key_bits(const PHYSEC_Key *K)
-{
-    printf("K = ");
-    for (int i=0; i<PHYSEC_KEY_SIZE_BYTES; i++)
-    {
-        for (int j=7; j>=0; j--)
-        {
-            if ((K->key[i] >> j) & 0x1)
-                printf("1");
-            else
-                printf("0");
-        }
-    }
-    printf("\n");
-}
-
-static void
-display_rssi(int8_t *rssis, uint8_t len)
+display_rssi(int8_t *rssis, uint16_t len)
 {
     printf("[ \n");
-    for (int i=0; i<len; i++)
+    for (uint16_t i=0; i<len; i++)
     {
         printf("\t%d\n", rssis[i]);
     }
@@ -3473,8 +3503,11 @@ verify_CS_MAC(const PHYSEC_Key *K, const PHYSEC_KeyGen *kg)
     memcpy(&tmp, kg, sizeof(PHYSEC_KeyGen)-PHYSEC_CS_MAC_SIZE);
     compute_CS_MAC(K, &tmp);
 
+#if PHYSEC_DEBUG
+    printf("AES_CMAC compare\n");
     hexdump(tmp.MAC, 16);
     hexdump(kg->MAC, 16);
+#endif
 
     return (memcmp(tmp.MAC, kg->MAC, PHYSEC_CS_MAC_SIZE) == 0);
 }
@@ -3611,20 +3644,22 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
 #if PHYSEC_DEBUG
             printf("<<< KEYGEN PKT RECEIVED - RECONCILIATION\n");
-            printf("VS vec:\n");
-            hexdump(kg_r->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
+            //printf("VS vec:\n");
+            //hexdump(kg_r->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
             printf("\n");
 #endif
 
 
             // compute vector and reconciliate
-            uint8_t y_A[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-            uint8_t diff[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-            PHYSEC_craft_reconciliate_vector(y_A, (const PHYSEC_Key*) &P);
+            //uint8_t y_A[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
+            int8_t diff[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
+            //PHYSEC_craft_reconciliate_vector(y_A, (const PHYSEC_Key*) &P);
             // fill kg_s->cs_vec with y = ybob - yalice
-            make_diff_vector(kg_s->cs_vec, y_A, kg_r->cs_vec);
+            //make_diff_vector(kg_s->cs_vec, y_A, kg_r->cs_vec);
 
-            PHYSEC_reconciliate(diff, &P);     // reconciliated key
+            //PHYSEC_reconciliate((const int8_t*)diff, &P);     // reconciliated key
+
+            PHYSEC_reconciliate_keys_with_debug(&(kg_r->K), &key);
 
 #if PHYSEC_DEBUG
             printf("Entropy before PA: %f\n", entropy(key.key, key_len));
@@ -3720,7 +3755,6 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                     {
                         // probe accepted, store rssi and respond to probe
                         m.rssi_msrmts[cnt] = rssi;
-                        m.nb_msrmts++;
 
                         PHYSEC_Packet pkt = {
                             .identifier = PHYSEC_PKT_IDENTIFIER,
@@ -3753,7 +3787,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 printf("<<< KEYGEN PKT RECEIVED\n");
                 printf("\n");
 #endif
-                if (cnt == 0)
+                if (cnt < PHYSEC_N_REQUIRED_MEASURE)
                     continue;
 
                 // check if enough measure for keygen
@@ -3792,7 +3826,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                     display_key_bits(&P);
                     printf("\n");
 #endif
-                    PHYSEC_craft_reconciliate_vector(kg_s->cs_vec, (const PHYSEC_Key*) &P);
+                    //PHYSEC_craft_reconciliate_vector(kg_s->cs_vec, (const PHYSEC_Key*) &P);
+
+                    memcpy(&(kg_s->K), &P, sizeof(PHYSEC_Key));
 
                     compute_CS_MAC(&P, kg_s);
 

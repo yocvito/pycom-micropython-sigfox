@@ -3397,6 +3397,7 @@ static void
 PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
 {
     PHYSEC_Key tmp = { 0 };
+    uint8_t diff_cnt = 0;
     printf("dif: ");
     for (int i=0; i<PHYSEC_KEY_SIZE; i++)
     {
@@ -3405,6 +3406,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
         if ( cur_kb_bit != cur_ka_bit)
         {
             printf("V");
+            diff_cnt++;
             tmp.key[i/8] |= (1 << (7-(i%8)));
         }
         else {
@@ -3415,6 +3417,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     display_key_bits(KB);
     printf("KA = ");
     display_key_bits(KA);
+    printf("mismatch rat %d/%d", diff_cnt, PHYSEC_KEY_SIZE);
 
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }

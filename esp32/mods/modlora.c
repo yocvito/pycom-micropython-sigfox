@@ -3432,6 +3432,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
 {
     PHYSEC_Key tmp = { 0 };
     printf("dif: ");
+    uint32_t nmismatch = 0;
     for (int i=0; i<PHYSEC_KEY_SIZE; i++)
     {
         uint8_t cur_kb_bit = (KB->key[i/8] >> (7-(i%8))) & 0x1;
@@ -3439,6 +3440,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
         if ( cur_kb_bit != cur_ka_bit)
         {
             printf("V");
+            nmismatch++;
             tmp.key[i/8] |= (1 << (7-(i%8)));
         }
         else {
@@ -3449,7 +3451,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     display_key_bits(KB);
     printf("KA = ");
     display_key_bits(KA);
-
+    printf("%% mismatch: %f\n", (float) nmismatch / (float) PHYSEC_KEY_SIZE);
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }
 
@@ -3558,6 +3560,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
     PHYSEC_Key P;
     int32_t nbits;
 
+    int8_t *rssis = calloc(sizeof(int8_t), PHYSEC_N_MAX_MEASURE);
     uint16_t n_required = PHYSEC_N_REQUIRED_MEASURE;
     PHYSEC_RssiMsrmts m = {
         .nb_msrmts = 0,
@@ -3598,7 +3601,9 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             #endif
                 // store rssi of last probe
                 m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
+                rssis[cnt] = rssi;
                 cnt++;
+                mp_hal_delay_ms(50);
             }
         }
 
@@ -3607,7 +3612,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         last_cnt_before_m_init = cnt - last_incomplete_window_size;
 
         #ifdef PHYSEC_DEBUG
-            display_rssi(m.rssi_msrmts, m.nb_msrmts);
+            display_rssi(rssis, cnt);
         #endif
 
         { // quantification
@@ -3621,7 +3626,26 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
             nbits = PHYSEC_quntification(&rssi_msrmts, 0.1, P.key);
             key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
+
+
+            PHYSEC_RssiMsrmts rssi_msrmts2 = {
+                .nb_msrmts = cnt,
+                .rssi_msrmts_delay = 0,
+                .rssi_msrmts = calloc(sizeof(int8_t), cnt)
+            };
+            PHYSEC_Key P2 = { 0 };
+            memcpy(rssi_msrmts2.rssi_msrmts, rssis, cnt*sizeof(int8_t));
+            int nbits2 = PHYSEC_quntification(&rssi_msrmts2, 0.1, P2.key);
+            printf("%d - %d - %d\n", nbits, key_len, nbits2);
+            if (memcmp(&P2, &key, sizeof(PHYSEC_Key)) != 0)
+            {
+                printf("Generated keys are different\n");
+                display_key_bits(&P2);
+                display_key_bits(&key);
+            }
+            free(rssi_msrmts2.rssi_msrmts);
         }
+
 
         // init m
         if(last_incomplete_window_size > 0){

@@ -3450,7 +3450,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     display_key_bits(KB);
     printf("KA = ");
     display_key_bits(KA);
-    printf("%% mismatch: %d/%d = %f\n", mismatch, PHYSEC_KEY_SIZE, (float) nmismatch / (float) PHYSEC_KEY_SIZE);
+    printf("%% mismatch: %d/%d = %f\n", nmismatch, PHYSEC_KEY_SIZE, (float) nmismatch / (float) PHYSEC_KEY_SIZE);
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }
 

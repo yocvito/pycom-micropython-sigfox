@@ -2895,20 +2895,18 @@ int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
 
 int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
 
-    double entropy = 0;
+    double negatif_entropy = 0;
     double proba;
     int8_t nbr_bit;
 
     for(int i = 0; i < d->bin_nbr; i++){
         proba = d->values[i] * d->bins[i];
         if(proba>0){
-            entropy +=  proba*log2(proba);
+            negatif_entropy +=  proba*log2(proba);
         }
     }
 
-    nbr_bit = (int8_t) (-entropy);
-
-    return pow(2,nbr_bit);
+    return (int8_t) pow(2.0,-negatif_entropy);
 }
 
 /*
@@ -3431,6 +3429,7 @@ static void
 PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
 {
     PHYSEC_Key tmp = { 0 };
+    uint8_t diff_cnt = 0;
     printf("dif: ");
     uint32_t nmismatch = 0;
     for (int i=0; i<PHYSEC_KEY_SIZE; i++)
@@ -3451,7 +3450,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     display_key_bits(KB);
     printf("KA = ");
     display_key_bits(KA);
-    printf("%% mismatch: %f\n", (float) nmismatch / (float) PHYSEC_KEY_SIZE);
+    printf("%% mismatch: %d/%d = %f\n", mismatch, PHYSEC_KEY_SIZE, (float) nmismatch / (float) PHYSEC_KEY_SIZE);
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }
 
@@ -3947,12 +3946,12 @@ key_agg(PHYSEC_Sync *sync, bool initiator)
 #define AES_BLOCK_SIZE PHYSEC_KEY_SIZE
 /**
  * @brief Encrypt a message using PHYSEC generated key
- * 
+ *
  * @param K       the PHYSEC Key
  * @param buf     the message to encrypt
  * @param size    the size of the data to encrypt
  * @param diggest the buffer to fill with the encrypted data (must be padded to a block size and greater or equal to buf size)
- * @param diggest_len the diggest new length (must be set to diggest max size and superior to buffer size) 
+ * @param diggest_len the diggest new length (must be set to diggest max size and superior to buffer size)
  */
 static int32_t PHYSEC_encrypt(PHYSEC_Key *K, const uint8_t *buf, const uint32_t size, uint8_t *diggest, uint32_t *diggest_len)
 {
@@ -3968,19 +3967,19 @@ static int32_t PHYSEC_encrypt(PHYSEC_Key *K, const uint8_t *buf, const uint32_t 
 
 /**
  * @brief Decrypt a message using PHYSEC generated key
- * 
+ *
  * @param K       the PHYSEC Key
  * @param buf     the encrypted message
  * @param size    the size of the data to encrypt (must be block size aligned)
  * @param cleartext the buffer to fill with the decrypted data (size must be block size aligned and greater or equal to buf size)
- * @param cleartext_len the cleartext new length (must be set to cleartext max size and superior to buffer size) 
+ * @param cleartext_len the cleartext new length (must be set to cleartext max size and superior to buffer size)
  */
 static int32_t PHYSEC_decrypt(PHYSEC_Key *K, const uint8_t *buf, const uint32_t size, uint8_t *cleartext, uint32_t *cleartext_len)
 {
     return PHYSEC_encrypt(K, buf, size, cleartext, cleartext_len);
 }
 
-static PHYSEC_DataCipher 
+static PHYSEC_DataCipher
 wait_physec_dt_packet(uint8_t *retbuffer, size_t *len, uint8_t *boff, uint8_t *eoff, uint32_t timeout)
 {
 if (*len < PHYSEC_DATA_PKT_MAX_SIZE)

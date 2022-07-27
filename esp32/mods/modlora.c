@@ -64,11 +64,13 @@
 /*!
  *  PHYSEC includes
  */
+#ifdef PHYSEC
 #include "str_utils.h"
 #include "extmod/crypto-algorithms/sha256.c"
 #include <math.h>
 #include "lora/system/crypto/cmac.h"
-
+#include "extmod/uzlib/uzlib.h"
+#endif
 
 #include "random.h"
 /******************************************************************************
@@ -198,7 +200,8 @@ typedef enum {
 #define PHYSEC_SYNC_WORD            0x67
 #define PHYSEC_PROBE_REC_TIMEOUT    5000
 
-#define PHYSEC_PKT_IDENTIFIER       (uint16_t) 0xe4b9
+#define PHYSEC_KG_PKT_IDENTIFIER    (uint16_t) 0xe4b9
+#define PHYSEC_DT_PKT_IDENTIFIER    (uint16_t) 0xe5b9
 
 #define PHYSEC_N_MAX_MEASURE        65536
 #define PHYSEC_N_REQUIRED_MEASURE   20
@@ -213,13 +216,14 @@ typedef enum {
 
 #define PHYSEC_DEV_ID_LEN           4
 #define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+2 // cnt is 2 bytes
-#define PHYSEC_KEYGEN_PAYLOAD_SIZE  1+PHYSEC_DEV_ID_LEN+PHYSEC_CS_COMPRESSED_SIZE
+#define PHYSEC_KEYGEN_PAYLOAD_SIZE  1+PHYSEC_DEV_ID_LEN+PHYSEC_CS_COMPRESSED_SIZE+PHYSEC_CS_MAC_SIZE
 #define PHYSEC_MAX_PAYLOAD_SIZE     PHYSEC_KEYGEN_PAYLOAD_SIZE
 // should be equal to sizeof(PHYSEC_packet)
 #define PHYSEC_MAX_PKT_SIZE         3+PHYSEC_MAX_PAYLOAD_SIZE
 
 #define PHYSEC_PROBE_RECONCIL_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1+PHYSEC_N_MAX_MEASURE
 
+#define PHYSEC_DATA_PKT_MAX_SIZE    LORA_PAYLOAD_SIZE_MAX-6
 
 
 /*!
@@ -263,6 +267,12 @@ typedef enum _PHYSEC_packet_type {
     PHYSEC_PT_MAX = 255
 } PHYSEC_PacketType;
 
+typedef enum _PHYSEC_DataCipher {
+    PHYSEC_DT_NONE = -1,
+    PHYSEC_DT_FULL = 0,     // 00
+    PHYSEC_DT_PARTIAL = 1   // 01
+} PHYSEC_DataCipher;
+
 typedef struct _PHYSEC_Key {
     uint8_t key[PHYSEC_KEY_SIZE_BYTES];
 } PHYSEC_Key;
@@ -285,6 +295,20 @@ typedef struct _PHYSEC_keygen {
     uint8_t MAC[PHYSEC_CS_MAC_SIZE];
 } __attribute__((__packed__)) PHYSEC_KeyGen;
 
+typedef struct _PHYSEC_DataCtrl {
+    uint16_t type:2;
+    uint16_t boff:8;
+    uint16_t eoff:8;
+    uint16_t size:8;
+    uint16_t padd:6;
+} __attribute__((__packed__)) PHYSEC_DataCtrl;
+
+typedef struct _PHYSEC_DataPkt {
+    uint16_t identifier;
+    PHYSEC_DataCtrl ctrl;
+    uint8_t data[PHYSEC_DATA_PKT_MAX_SIZE];
+} __attribute__((__packed__)) PHYSEC_DataPkt;
+
 
 struct density {
     int8_t q_0;
@@ -301,6 +325,8 @@ struct peer_key{
 };
 
 typedef struct peer_key** peer_key_list_t;
+
+static inline uint16_t toa(uint8_t sf);
 
 #endif
 
@@ -374,6 +400,8 @@ typedef struct {
 
     uint32_t        physec_device_id;
     uint32_t        physec_remote_device_id;
+    uint16_t        physec_timeout;
+    bool            physec_initiator;
 
     struct peer_key *peer_key_list;
 
@@ -463,7 +491,7 @@ STATIC mp_obj_t lora_nvram_erase (mp_obj_t self_in);
 // List of generated keys
 void peer_key_list_init(peer_key_list_t pkl);
 void peer_key_list_free(peer_key_list_t pkl);
-void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key);
+void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, const uint8_t *key);
 /*
 return value:
     0  : peer_id not found, key_out = NULL.
@@ -1984,8 +2012,10 @@ STATIC const mp_arg_t lora_init_args[] = {
     { MP_QSTR_device_class, MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = CLASS_A} },
     { MP_QSTR_region,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
     #ifdef PHYSEC
-    { MP_QSTR_physec_device_id,              MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
-    { MP_QSTR_physec_remote_device_id,       MP_ARG_KW_ONLY  | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+    { MP_QSTR_physec_device_id,              MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = 0x11111111} },
+    { MP_QSTR_physec_remote_device_id,       MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = 0x00000000} },
+    { MP_QSTR_physec_timeout,      MP_ARG_KW_ONLY  | MP_ARG_INT,   {.u_int = PHYSEC_PROBE_TIMEOUT } },
+    { MP_QSTR_physec_initiator,                       MP_ARG_KW_ONLY  | MP_ARG_BOOL,   {.u_bool = false } },
     #endif
 };
 STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_uint_t n_kw, const mp_obj_t *all_args) {
@@ -2015,8 +2045,10 @@ STATIC mp_obj_t lora_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_ui
 
     #ifdef PHYSEC
     // Set device id
-    self->physec_device_id = (uint32_t) MP_OBJ_SMALL_INT_VALUE(args[16].u_obj);
-    self->physec_remote_device_id = (uint32_t) MP_OBJ_SMALL_INT_VALUE(args[17].u_obj);
+    self->physec_device_id = (uint32_t) args[16].u_int;
+    self->physec_remote_device_id = (uint32_t) args[17].u_int;
+    self->physec_timeout = (uint32_t) args[18].u_int + toa(self->sf);
+    self->physec_initiator = args[19].u_bool;
 
     // init key per peer list
     peer_key_list_init(&(self->peer_key_list));
@@ -3142,7 +3174,7 @@ void peer_key_list_free(peer_key_list_t pkl){
     *pkl = NULL;
 }
 
-void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key){
+void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, const uint8_t *key){
 
     struct peer_key *pk = malloc(sizeof(struct peer_key));
     pk->peer_id = peer_id;
@@ -3237,7 +3269,7 @@ toa(uint8_t sf)
  * \return PHYSEC_PacketType
  */
 static PHYSEC_PacketType
-wait_physec_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *start_time, int8_t *rssi)
+wait_physec_kg_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *start_time, int8_t *rssi)
 {
     if (len < PHYSEC_MAX_PAYLOAD_SIZE)
         return PHYSEC_PT_NONE;
@@ -3253,7 +3285,7 @@ wait_physec_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *s
             if (start_time != NULL)
                 *start_time = mp_hal_ticks_ms();
             PHYSEC_Packet *pkt = (PHYSEC_Packet*) buf;
-            if (pkt->identifier != PHYSEC_PKT_IDENTIFIER)
+            if (pkt->identifier != PHYSEC_KG_PKT_IDENTIFIER)
                 continue;
 
             switch (pkt->type)
@@ -3318,7 +3350,7 @@ wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
                 *duration = timeout;
             break;
         }
-        if ((pt = wait_physec_packet(buf, sizeof(buf), timeout-wtime, NULL, &rss)) == PHYSEC_PT_PROBE)
+        if ((pt = wait_physec_kg_packet(buf, sizeof(buf), timeout-wtime, NULL, &rss)) == PHYSEC_PT_PROBE)
         {
             PHYSEC_Probe *p = (PHYSEC_Probe *) buf;
             if (memcmp(id, p->id, PHYSEC_DEV_ID_LEN) == 0)
@@ -3440,7 +3472,7 @@ PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
 
     // set matrix A to random bernoulli
 
-    mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);   
+    mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
 }
 
 static void
@@ -3484,11 +3516,11 @@ entropy(uint8_t *bits, uint32_t nbits)
 
 /**
  * @brief Fill MAC field of a PHYSEC_KeyGen struct regarding the content of the KeyGen payload (ID + CS_VEC)
- * 
+ *
  * @param K  the key to use to generate the MAC
- * @param kg the PHYSEC_KeyGen structure to work on 
+ * @param kg the PHYSEC_KeyGen structure to work on
  */
-static void 
+static void
 compute_CS_MAC(const PHYSEC_Key *K, PHYSEC_KeyGen *kg)
 {
     AES_CMAC_CTX ctx;
@@ -3540,7 +3572,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         {
             // send probe
             PHYSEC_Packet pkt = {
-                .identifier = PHYSEC_PKT_IDENTIFIER,
+                .identifier = PHYSEC_KG_PKT_IDENTIFIER,
                 .type = PHYSEC_PT_PROBE,
                 .payload = { 0 }
             };
@@ -3621,7 +3653,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
         // send reconciliation begin packet
         PHYSEC_Packet pkt = {
-            .identifier = PHYSEC_PKT_IDENTIFIER,
+            .identifier = PHYSEC_KG_PKT_IDENTIFIER,
             .type = PHYSEC_PT_KEYGEN,
             .payload = { 0 }
         };
@@ -3638,7 +3670,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         // wait for KEYGEN packet
         uint8_t buf[PHYSEC_KEYGEN_PAYLOAD_SIZE] = { 0 };
         PHYSEC_PacketType pkt_type = PHYSEC_PT_NONE;
-        while ( ((pkt_type = wait_physec_packet(buf, sizeof(buf), 5000, NULL, NULL)) & (PHYSEC_PT_KEYGEN|PHYSEC_PT_RESET)) == 0 );
+        while ( ((pkt_type = wait_physec_kg_packet(buf, sizeof(buf), 5000, NULL, NULL)) & (PHYSEC_PT_KEYGEN|PHYSEC_PT_RESET)) == 0 );
 
         if (pkt_type == PHYSEC_PT_KEYGEN)
         {
@@ -3654,7 +3686,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
             // compute vector and reconciliate
             //uint8_t y_A[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-            int8_t diff[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
+            //int8_t diff[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
             //PHYSEC_craft_reconciliate_vector(y_A, (const PHYSEC_Key*) &P);
             // fill kg_s->cs_vec with y = ybob - yalice
             //make_diff_vector(kg_s->cs_vec, y_A, kg_r->cs_vec);
@@ -3732,7 +3764,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         uint8_t buf[PHYSEC_MAX_PAYLOAD_SIZE] = { 0 };
         uint32_t start = 0;
         int8_t rssi = 0;
-        switch ( wait_physec_packet(buf, sizeof(buf), -1, &start, &rssi) )
+        switch ( wait_physec_kg_packet(buf, sizeof(buf), -1, &start, &rssi) )
         {
             case PHYSEC_PT_PROBE:
             {
@@ -3759,7 +3791,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                         m.rssi_msrmts[cnt] = rssi;
 
                         PHYSEC_Packet pkt = {
-                            .identifier = PHYSEC_PKT_IDENTIFIER,
+                            .identifier = PHYSEC_KG_PKT_IDENTIFIER,
                             .type = PHYSEC_PT_PROBE,
                             .payload = { 0 }
                         };
@@ -3805,7 +3837,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
                 // generate key
                 PHYSEC_Packet pkt = {
-                    .identifier = PHYSEC_PKT_IDENTIFIER,
+                    .identifier = PHYSEC_KG_PKT_IDENTIFIER,
                     .type = PHYSEC_PT_KEYGEN,
                     .payload = { 0 }
                 };
@@ -3888,6 +3920,155 @@ key_agg(PHYSEC_Sync *sync, bool initiator)
     return k;
 }
 
+#define AES_BLOCK_SIZE PHYSEC_KEY_SIZE
+/**
+ * @brief Encrypt a message using PHYSEC generated key
+ * 
+ * @param K       the PHYSEC Key
+ * @param buf     the message to encrypt
+ * @param size    the size of the data to encrypt
+ * @param diggest the buffer to fill with the encrypted data (must be padded to a block size and greater or equal to buf size)
+ * @param diggest_len the diggest new length (must be set to diggest max size and superior to buffer size) 
+ */
+static int32_t PHYSEC_encrypt(PHYSEC_Key *K, const uint8_t *buf, const uint32_t size, uint8_t *diggest, uint32_t *diggest_len)
+{
+    if (*diggest_len < size)
+        return -1;
+    for (uint32_t i=0; i<size; i++)
+    {
+        diggest[i] = buf[i] ^ K->key[i%PHYSEC_KEY_SIZE_BYTES];      // for now just XOR
+    }
+    *diggest_len = size;
+    return size;
+}
+
+/**
+ * @brief Decrypt a message using PHYSEC generated key
+ * 
+ * @param K       the PHYSEC Key
+ * @param buf     the encrypted message
+ * @param size    the size of the data to encrypt (must be block size aligned)
+ * @param cleartext the buffer to fill with the decrypted data (size must be block size aligned and greater or equal to buf size)
+ * @param cleartext_len the cleartext new length (must be set to cleartext max size and superior to buffer size) 
+ */
+static int32_t PHYSEC_decrypt(PHYSEC_Key *K, const uint8_t *buf, const uint32_t size, uint8_t *cleartext, uint32_t *cleartext_len)
+{
+    return PHYSEC_encrypt(K, buf, size, cleartext, cleartext_len);
+}
+
+static PHYSEC_DataCipher 
+wait_physec_dt_packet(uint8_t *retbuffer, size_t *len, uint8_t *boff, uint8_t *eoff, uint32_t timeout)
+{
+if (*len < PHYSEC_DATA_PKT_MAX_SIZE)
+        return PHYSEC_DT_NONE;
+
+    uint32_t start = mp_hal_ticks_ms();
+    uint32_t wtime = 0;
+    uint8_t buf[sizeof(PHYSEC_DataPkt)];
+    // wait packet
+    while (timeout == -1 || (wtime = mp_hal_ticks_ms()-start) < timeout)
+    {
+        memset(buf, 0, sizeof(PHYSEC_DataPkt));
+        if (lora_recv(buf, sizeof(buf), (timeout == -1) ? timeout : timeout-wtime, NULL) > 0)
+        {
+            PHYSEC_DataPkt *pkt = (PHYSEC_DataPkt*) buf;
+            if (pkt->identifier != PHYSEC_DT_PKT_IDENTIFIER)
+                continue;
+
+            if (pkt->ctrl.size < *len)
+                *len = pkt->ctrl.size;      // extra bytes are lost for now, could add a cache buffer for
+                                            // remaining data or achieve to let data in the transceiver FIFO
+            memcpy(retbuffer, pkt->data, *len);
+
+            switch (pkt->ctrl.type)
+            {
+                case PHYSEC_DT_FULL:
+                {
+                    *boff = 0;
+                    *eoff = pkt->ctrl.size;
+                    break;
+                }
+                case PHYSEC_DT_PARTIAL:
+                {
+                    *boff = pkt->ctrl.boff;
+                    *eoff = pkt->ctrl.eoff;
+                    break;
+                }
+                default:
+                    return PHYSEC_DT_NONE;
+
+            }
+
+            return pkt->ctrl.type;
+        }
+    }
+
+    return PHYSEC_DT_NONE;
+}
+
+// need to better handle the buffer sizes on these functions
+static int32_t
+PHYSEC_send(PHYSEC_Key *K, const uint8_t *msg, const uint32_t len, uint32_t timeout)
+{
+    if (len > 0)
+    {
+        PHYSEC_DataPkt pkt = {
+            .identifier = PHYSEC_DT_PKT_IDENTIFIER,
+            .ctrl = {
+                .type = PHYSEC_DT_FULL,
+                .boff = 0,
+                .eoff = len,
+                .size = len
+            },
+            .data = { 0 }
+        };
+        uint32_t buf_len = PHYSEC_DATA_PKT_MAX_SIZE;
+        PHYSEC_encrypt(K, msg, len, (uint8_t*) &(pkt.data), &buf_len);
+        uint32_t sent_len = sizeof(pkt)-(PHYSEC_DATA_PKT_MAX_SIZE-buf_len);
+
+        int32_t ret = lora_send((const uint8_t*)&pkt, sent_len, timeout);
+        if (ret == sent_len)
+            return buf_len;
+
+        return ret;
+    }
+    return 0;
+}
+
+static int32_t
+PHYSEC_recv(PHYSEC_Key *K, uint8_t *msg, const uint32_t len, uint32_t timeout)
+{
+    if (len > 0)
+    {
+        uint32_t newlen = sizeof(PHYSEC_DataPkt);
+        uint8_t buf[newlen];
+        memset(buf, 0, newlen);
+
+        uint8_t boff;
+        uint8_t eoff;
+        switch (wait_physec_dt_packet(buf, &newlen, &boff, &eoff, timeout))
+        {
+            case PHYSEC_DT_FULL:
+            {
+                printf("### PHYSEC FULL CIPHERED PAYLOAD\n");
+                break;
+            }
+            case PHYSEC_DT_PARTIAL:
+            {
+                printf("### PHYSEC PARTIAL CIPHERED PAYLOAD\n");
+                break;
+            }
+            default:
+                return 0;
+        }
+        uint32_t clear_len = newlen;
+        PHYSEC_decrypt(K, &(buf[boff]), newlen, msg, &clear_len);
+
+        return clear_len;
+    }
+    return 0;
+}
+
 STATIC mp_obj_t
 lora_physec_sandbox(mp_obj_t self){
     printf("---------- > PHYSEC sandbox > -----------\n");
@@ -3939,6 +4120,22 @@ lora_privacy_amplification(mp_obj_t self, mp_obj_t P){
     return mp_obj_new_str((const char *) &(K.key), 16);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(lora_privacy_amplification_obj, lora_privacy_amplification);
+
+STATIC mp_obj_t
+lora_physec_add_key(mp_obj_t self, mp_obj_t id, mp_obj_t key)
+{
+    if (mp_obj_get_int(mp_obj_len(key)) != PHYSEC_KEY_SIZE_BYTES)
+        nlr_raise(mp_obj_new_exception_msg(&mp_type_Exception, "key should match PHYSEC_KEY_SIZE_BYTES (16 bytes)"));
+
+    int32_t rmt_id = mp_obj_get_int(id);
+    peer_key_delete_by_peer_id(&(lora_obj.peer_key_list), rmt_id);
+
+    peer_key_push(&(lora_obj.peer_key_list), rmt_id, (const uint8_t*) mp_obj_str_get_str(key));
+
+    return mp_obj_new_bool(true);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_3(lora_physec_add_key_obj, lora_physec_add_key);
+
 #endif
 
 STATIC const mp_map_elem_t lora_locals_dict_table[] = {
@@ -3973,6 +4170,7 @@ STATIC const mp_map_elem_t lora_locals_dict_table[] = {
     { MP_OBJ_NEW_QSTR(MP_QSTR_physec_sandbox),     (mp_obj_t)&lora_physec_sandbox_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_privacy_amplification),     (mp_obj_t)&lora_privacy_amplification_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_physec_key_agg),     (mp_obj_t)&lora_physec_key_agg_obj },
+    { MP_OBJ_NEW_QSTR(MP_QSTR_physec_add_key),     (mp_obj_t)&lora_physec_add_key_obj },
 #endif
 
 #ifdef LORA_OPENTHREAD_ENABLED
@@ -4134,31 +4332,39 @@ static int lora_socket_send (mod_network_socket_obj_t *s, const byte *buf, mp_ui
             #ifdef PHYSEC
             case E_LORA_STACK_MODE_LORAPHYSEC:
                 {
-                    uint8_t key[16];
+                    PHYSEC_Key key = { 0 };
+                    //uint8_t key[16];
                     #ifdef PHYSEC_DEBUG
                         printf("--- lora_socket_send using LORAPHYSEC protocol ---\n");
-                        printf("\t %d -> %d\n", lora_obj.physec_device_id, lora_obj.physec_remote_device_id);
+                        printf("\t 0x%04x -> 0x%04X\n", lora_obj.physec_device_id, lora_obj.physec_remote_device_id);
                     #endif
-                    if(peer_key_list_get_key_by_peer_id(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key)){
+                    if(peer_key_list_get_key_by_peer_id(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key.key)){
                         #ifdef PHYSEC_DEBUG
                             printf("\tkey : [");
                             for(int i = 0; i<16; i++){
-                                printf(" %d", key[i]);
+                                printf(" 0x%02x", key.key[i]);
                             }
                             printf("]\n");
                         #endif
                         // encrypt msg
+                        return PHYSEC_send(&key, buf, len, s->sock_base.timeout);
                     }else{
                         #ifdef PHYSEC_DEBUG
                             printf("\t key : Not found. Regestring fake key :\n");
                         #endif
                         // gen key
-                        memset(key, 3, 16*sizeof(uint8_t));
+                        PHYSEC_Sync sync = { 0 };
+                        memcpy(&(sync.dev_id), &(lora_obj.physec_device_id), sizeof(PHYSEC_DEV_ID_LEN));
+                        memcpy(&(sync.rmt_dev_id), &(lora_obj.physec_remote_device_id), sizeof(PHYSEC_DEV_ID_LEN));
+                        PHYSEC_Key *newkey = key_agg(&sync, lora_obj.physec_initiator);
 
                         // register key
-                        peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key);
+                        peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, (const uint8_t*) newkey->key);
+
+                        free(newkey);
 
                         // encrypt msg
+                        return PHYSEC_send(newkey, buf, len, s->sock_base.timeout);
                     }
                 }
                 // n_bytes = lora_send (buf, len, s->sock_base.timeout);
@@ -4193,12 +4399,54 @@ static int lora_socket_recv (mod_network_socket_obj_t *s, byte *buf, mp_uint_t l
     }
 #endif  // #ifdef LORA_OPENTHREAD_ENABLED
 
-    int ret = lora_recv (buf, len, s->sock_base.timeout, NULL);
-    if (ret < 0) {
-        *_errno = MP_EAGAIN;
-        return -1;
+    if (lora_obj.stack_mode == E_LORA_STACK_MODE_LORAPHYSEC)
+    {
+
+        PHYSEC_Key key = { 0 };
+        //uint8_t key[16];
+        #ifdef PHYSEC_DEBUG
+            printf("--- lora_socket_recv using LORAPHYSEC protocol ---\n");
+            printf("\t 0x%04X -> 0x%04X\n", lora_obj.physec_device_id, lora_obj.physec_remote_device_id);
+        #endif
+        if(peer_key_list_get_key_by_peer_id(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, key.key)){
+            #ifdef PHYSEC_DEBUG
+                printf("\tkey : [");
+                for(int i = 0; i<16; i++){
+                    printf(" 0x%02x", key.key[i]);
+                }
+                printf("]\n");
+            #endif
+            // encrypt msg
+            return PHYSEC_recv(&key, buf, len, s->sock_base.timeout);
+        }else{
+            #ifdef PHYSEC_DEBUG
+                printf("\t key : Not found. Regestring fake key :\n");
+            #endif
+            // gen key
+            PHYSEC_Sync sync = { 0 };
+            memcpy(&(sync.dev_id), &(lora_obj.physec_device_id), sizeof(PHYSEC_DEV_ID_LEN));
+            memcpy(&(sync.rmt_dev_id), &(lora_obj.physec_remote_device_id), sizeof(PHYSEC_DEV_ID_LEN));
+            PHYSEC_Key *newkey = key_agg(&sync, lora_obj.physec_initiator);
+
+            // register key
+            peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, (const uint8_t*) newkey->key);
+
+            free(newkey);
+
+            // encrypt msg
+            return PHYSEC_recv(newkey, buf, len, s->sock_base.timeout);
+        }
     }
-    return ret;
+    else
+    {
+        int ret = lora_recv (buf, len, s->sock_base.timeout, NULL);
+        if (ret < 0) {
+            *_errno = MP_EAGAIN;
+            return -1;
+        }
+        return ret;
+
+    }
 }
 
 static int lora_socket_recvfrom (mod_network_socket_obj_t *s, byte *buf, mp_uint_t len, byte *ip, mp_uint_t *port, int *_errno) {

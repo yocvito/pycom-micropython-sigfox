@@ -3426,7 +3426,7 @@ void compression_matrix_free(matrix A){
         free(A.content[i]);
     }
 
-    free(A);
+    free(A.content);
 };
 
 

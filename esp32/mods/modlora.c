@@ -70,6 +70,7 @@
 #include <math.h>
 #include "lora/system/crypto/cmac.h"
 #include "extmod/uzlib/uzlib.h"
+#include "modlora_physec_rec_mat.h"
 #endif
 
 #include "random.h"
@@ -3366,11 +3367,67 @@ wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
     return cnt;
 }
 
+// Reconciliation
+
+// --- Elementery matrix operations
+
 typedef struct _matrix {
     uint8_t nrows;
     uint8_t ncols;
-    uint8_t **content;
+    uint8_t **content; // A row is a ncols array
 } matrix;
+
+void matrix_extract_row(matrix A, int index, uint8_t *vec_out){
+    memcpy(vec_out, A[index], A.ncols * sizeof(uint8_t));
+}
+
+void matrix_extract_col(matrix A, int index, uint8_t *vec_out){
+    for(int i = 0; i < A.nrows; i++){
+        vec_out[i] = A[i][index];
+    }
+}
+
+uint8_t matrix_vec_dot_product(uint8_t *vec1, uint8_t *vec2, uint8_t size){
+    
+    uint8_t res = 0;
+    
+    for(int i = 0; i < size, i++){
+        ret += vec1[i]*vec2[i];
+    }
+
+    return ret;
+}
+
+// defining compression matrix
+matrix compression_matrix_def(){
+
+    uint8_t A_1D_content[] = A_1D_CONTENT;
+
+    matrix A;
+    A.nrows = PHYSEC_CS_COMPRESSED_SIZE;
+    A.ncols = PHYSEC_KEY_SIZE;
+    A.content = malloc(PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t*));
+    
+    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++){
+
+        A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
+
+        for(int j = 0; j < PHYSEC_KEY_SIZE; j++){
+            A.content[i][j] = A_1D_content[i*PHYSEC_KEY_SIZE+j];
+        }
+    }
+
+    return A;
+};
+
+void compression_matrix_free(matrix A){
+    
+    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++){
+        free(A.content[i]);
+    }
+
+    free(A);
+};
 
 
 static void
@@ -3386,6 +3443,7 @@ mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
     }
 }
 
+// Does nothing for now
 static void
 make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs_vec)
 {
@@ -3393,6 +3451,7 @@ make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs
         diff_vec[i] = 0;
 }
 
+// To modify : diff_vec only contains 1 or 0.
 static void
 PHYSEC_reconciliate(const int8_t *diff_vec, PHYSEC_Key *k)
 {
@@ -3454,6 +3513,7 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }
 
+// Using a static matrix A
 static void
 PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
 {
@@ -3475,6 +3535,9 @@ PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
 
     mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
 }
+
+
+// END : Reconciliation
 
 static void
 PHYSEC_privacy_amplification(PHYSEC_Key *key)

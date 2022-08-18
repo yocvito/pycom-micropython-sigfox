@@ -3378,12 +3378,12 @@ typedef struct _matrix {
 } matrix;
 
 void matrix_extract_row(matrix A, int index, uint8_t *vec_out){
-    memcpy(vec_out, A[index], A.ncols * sizeof(uint8_t));
+    memcpy(vec_out, A.content[index], A.ncols * sizeof(uint8_t));
 }
 
 void matrix_extract_col(matrix A, int index, uint8_t *vec_out){
     for(int i = 0; i < A.nrows; i++){
-        vec_out[i] = A[i][index];
+        vec_out[i] = A.content[i][index];
     }
 }
 
@@ -3391,11 +3391,11 @@ uint8_t matrix_vec_dot_product(uint8_t *vec1, uint8_t *vec2, uint8_t size){
     
     uint8_t res = 0;
     
-    for(int i = 0; i < size, i++){
-        ret += vec1[i]*vec2[i];
+    for(int i = 0; i < size; i++){
+        res += vec1[i]*vec2[i];
     }
 
-    return ret;
+    return res;
 }
 
 // defining compression matrix
@@ -3413,6 +3413,7 @@ matrix compression_matrix_def(){
         A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
 
         for(int j = 0; j < PHYSEC_KEY_SIZE; j++){
+            printf("%d : %d\n", i, A_1D_content[i*PHYSEC_KEY_SIZE+j]);
             A.content[i][j] = A_1D_content[i*PHYSEC_KEY_SIZE+j];
         }
     }

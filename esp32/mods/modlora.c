@@ -3377,13 +3377,13 @@ typedef struct _matrix {
     uint8_t **content; // A row is a ncols array
 } matrix;
 
-void matrix_extract_row(matrix A, int index, uint8_t *vec_out){
-    memcpy(vec_out, A.content[index], A.ncols * sizeof(uint8_t));
+void matrix_extract_row(const matrix *A, int index, uint8_t *vec_out){
+    memcpy(vec_out, A->content[index], A.ncols * sizeof(uint8_t));
 }
 
-void matrix_extract_col(matrix A, int index, uint8_t *vec_out){
+void matrix_extract_col(const matrix *A, int index, uint8_t *vec_out){
     for(int i = 0; i < A.nrows; i++){
-        vec_out[i] = A.content[i][index];
+        vec_out[i] = A->content[i][index];
     }
 }
 
@@ -3418,7 +3418,20 @@ static void vec_key2vec(const PHYSEC_Key *k, uint8_t *vec_out){
 }
 
 static void vec_vec2key(uint8_t *vec, const PHYSEC_Key *k_out){
-    // To implement
+    
+    int byte_index = -1;
+    int in_byte_index;
+
+    memset(k_out->key, 0, PHYSEC_KEY_SIZE_BYTES*sizeof(uint8_t));
+
+    for(int i = 0; i < PHYSEC_KEY_SIZE; i++){
+        if(i%8 == 0){
+            byte_index++;
+            in_byte_index = 0;
+        }
+        k_out->key[byte_index] +=  << (7-in_byte_index);
+    }
+    
 }
 
 // defining compression matrix
@@ -3465,6 +3478,59 @@ mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
             ret[i] += A->content[i][j] * vec[i];
         }
     }
+}
+
+// --- atom array
+
+struct atom{
+    int index;
+    uint8_t atom[PHYSEC_CS_COMPRESSED_SIZE];
+}
+
+struct atom_array{
+    int not_used_atoms_nbr;
+    struct atom atoms[PHYSEC_KEY_SIZE];
+}
+
+static struct atom_array atom_array_init(matrix *A){
+    
+    struct atom_array atoms;
+
+    for(int i = 0; i<PHYSEC_KEY_SIZE; i++){
+        atoms[i].index = i;
+        matrix_extract_col(A, i, atoms[i].atom);
+    }
+
+    return atoms;
+}
+
+static void atom_array_mark_as_used(struct atom_array *atoms, int index){
+    memcpy(
+        atoms->atoms[index],
+        atoms->atoms[atoms->not_used_atoms_nbr -1],
+        PHYSEC_CS_COMPRESSED_SIZE*sizeof(uint8_t)
+    );
+    atoms->not_used_atoms_nbr--;
+}
+
+static int atom_array_get_best_matching_atom_index(struct atom_array *atoms, uint8_t *residual){
+
+    int max_index = -1;
+    int max = -1;
+
+    uint8_t dot_product;
+
+    for(int i = 0; i < atoms->not_used_atoms_nbr; i++){
+        
+        dot_product = vec_dot_product(atoms->atoms[i], residual, PHYSEC_CS_COMPRESSED_SIZE);
+        if(dot_product > max){
+            max = dot_product;
+            max_index = i;
+        }
+    
+    }
+
+    return max_index;
 }
 
 // Does nothing for now

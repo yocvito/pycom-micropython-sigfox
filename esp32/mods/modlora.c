@@ -3369,6 +3369,8 @@ wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
 
 // Reconciliation
 
+#define PHYSEC_RECONCILIATION_EPS 1.0
+
 // --- Elementery matrix operations
 
 typedef struct _matrix {
@@ -3397,6 +3399,14 @@ void vec_diff(const uint8_t *vec1, const uint8_t *vec2, const uint8_t *vec_out, 
     for(int i = 0; i < size; i++){
         vec_out[i] = vec1[i] - vec2[i];
     }
+}
+
+double vec_norm2(const uint8_t *vec, uint8_t size){
+    double norm = 0;
+    for(int i = 0; i < size; i++){
+        norm += (double) (vec[i] * vec[i]);
+    }
+    return sqrt(norm);
 }
 
 uint8_t vec_dot_product(const uint8_t *vec1, const uint8_t *vec2, uint8_t size){
@@ -3612,8 +3622,39 @@ PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k, matrix *A
     mul_matrix_H(A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
 }
 
-static void PHYSEC_compute_key_error(matrix *A, uint8_t *y, uint8_t *x_out){
-    // To implement
+static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, const uint8_t *x_out){
+    
+    // Init key error
+    memset(x_out, 0, PHYSEC_KEY_SIZE*sizeof(uint8_t));
+
+    // Init residual
+    uint8_t residual[PHYSEC_CS_COMPRESSED_SIZE];
+    memcpy(residual, y, PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t));
+
+    // Init atom array
+    struct atom_array atoms = atom_array_init(A);
+    int best_matching_atom_index;
+
+    while(
+        atoms.not_used_atoms_nbr > 0 &&
+        vec_norm2(residual, PHYSEC_CS_COMPRESSED_SIZE) > PHYSEC_RECONCILIATION_EPS
+    ){
+
+        best_matching_atom_index = atom_array_get_best_matching_atom_index(atoms, residual);
+
+        x_out[best_matching_atom_index] = 1;
+
+        vec_diff(
+            residual,
+            atoms->atoms[best_matching_atom_index],
+            residual,
+            PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t)
+        );
+
+        atom_array_mark_as_used(atoms, best_matching_atom_index);
+
+    }
+
 }
 
 // --- The hight level function

@@ -3387,7 +3387,19 @@ void matrix_extract_col(matrix A, int index, uint8_t *vec_out){
     }
 }
 
-uint8_t matrix_vec_dot_product(uint8_t *vec1, uint8_t *vec2, uint8_t size){
+void vec_sum(const uint8_t *vec1, const uint8_t *vec2, const uint8_t *vec_out, uint8_t size){
+    for(int i = 0; i < size; i++){
+        vec_out[i] = vec1[i] + vec2[i];
+    }
+}
+
+void vec_diff(const uint8_t *vec1, const uint8_t *vec2, const uint8_t *vec_out, uint8_t size){
+    for(int i = 0; i < size; i++){
+        vec_out[i] = vec1[i] - vec2[i];
+    }
+}
+
+uint8_t vec_dot_product(const uint8_t *vec1, const uint8_t *vec2, uint8_t size){
     
     uint8_t res = 0;
     
@@ -3396,6 +3408,17 @@ uint8_t matrix_vec_dot_product(uint8_t *vec1, uint8_t *vec2, uint8_t size){
     }
 
     return res;
+}
+
+static void vec_key2vec(const PHYSEC_Key *k, uint8_t *vec_out){
+    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
+    {
+        vec_out[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
+    }
+}
+
+static void vec_vec2key(uint8_t *vec, const PHYSEC_Key *k_out){
+    // To implement
 }
 
 // defining compression matrix
@@ -3514,22 +3537,64 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }
 
-static void PHYSEC_key2vec(const PHYSEC_Key *k, uint8_t *vec_out){
-    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
-    {
-        vec_out[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
-    }
-}
-
 static void
 PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k, matrix *A)
 {
     uint8_t k_vec[PHYSEC_KEY_SIZE];
-    PHYSEC_key2vec(k, k_vec);
+    vec_key2vec(k, k_vec);
 
     mul_matrix_H(A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
 }
 
+static void PHYSEC_compute_key_error(matrix *A, uint8_t *y, uint8_t *x_out){
+    // To implement
+}
+
+// --- The hight level function
+
+// --- --- For Bob
+static void PHYSEC_reconciliation_compute_compressed_key(const PHYSEC_Key *k, const uint8_t *y_out){
+    
+    matrix A = compression_matrix_def();
+
+    PHYSEC_craft_reconciliate_vector(y_out, k, &A);
+
+    compression_matrix_free(A);
+}
+
+// --- --- For Alice
+static PHYSEC_Key PHYSEC_reconciliation_key(
+    const PHYSEC_Key *Alice_key,
+    const uint8_t *Bob_compressed_key
+){
+    matrix A = compression_matrix_def();
+
+    uint8_t Alice_key_vec[PHYSEC_KEY_SIZE];
+    uint8_t Alice_compressed_key[PHYSEC_CS_COMPRESSED_SIZE];
+    uint8_t compressed_key_diff[PHYSEC_CS_COMPRESSED_SIZE];
+    uint8_t key_error[PHYSEC_KEY_SIZE];
+    PHYSEC_Key reconciliated_key;
+    uint8_t reconciliated_key_vec[PHYSEC_KEY_SIZE];
+
+    PHYSEC_craft_reconciliate_vector(Alice_compressed_key, Alice_key, &A);
+    vec_diff(Alice_compressed_key, Bob_compressed_key, compressed_key_diff, PHYSEC_CS_COMPRESSED_SIZE);
+    PHYSEC_compute_key_error(&A, compressed_key_diff, key_error);
+
+    // reconciliation
+    vec_key2vec(Alice_key, Alice_key_vec);
+    for(int i = 0; i<PHYSEC_KEY_SIZE; i++){
+        if(key_error[i]){
+            reconciliated_key_vec[i] = 1-Alice_key_vec[i];
+        }else{
+            reconciliated_key_vec[i] = Alice_key_vec[i];
+        }
+    }
+    vec_vec2key(reconciliated_key_vec, &reconciliated_key);
+
+    compression_matrix_free(A);
+
+    return reconciliated_key;
+}
 
 // END : Reconciliation
 

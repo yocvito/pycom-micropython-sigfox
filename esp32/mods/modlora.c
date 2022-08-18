@@ -3452,7 +3452,7 @@ make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs
         diff_vec[i] = 0;
 }
 
-// To modify : diff_vec only contains 1 or 0.
+// Not used for now
 static void
 PHYSEC_reconciliate(const int8_t *diff_vec, PHYSEC_Key *k)
 {
@@ -3514,27 +3514,20 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }
 
-// Using a static matrix A
-static void
-PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
-{
-    uint8_t k_vec[PHYSEC_KEY_SIZE] = { 0 };
+static void PHYSEC_key2vec(const PHYSEC_Key *k, uint8_t *vec_out){
     for (int i=0; i<PHYSEC_KEY_SIZE; i++)
     {
-        k_vec[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
+        vec_out[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
     }
+}
 
-    matrix A = {
-        .ncols = PHYSEC_KEY_SIZE,
-        .nrows = PHYSEC_CS_COMPRESSED_SIZE,
-        .content = malloc( PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t*))
-    };
-    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++)
-        A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
+static void
+PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k, matrix *A)
+{
+    uint8_t k_vec[PHYSEC_KEY_SIZE];
+    PHYSEC_key2vec(k, k_vec);
 
-    // set matrix A to random bernoulli
-
-    mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
+    mul_matrix_H(A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
 }
 
 

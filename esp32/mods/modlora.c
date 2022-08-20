@@ -2898,7 +2898,6 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
 
     double negatif_entropy = 0;
     double proba;
-    int8_t nbr_bit;
 
     for(int i = 0; i < d->bin_nbr; i++){
         proba = d->values[i] * d->bins[i];
@@ -3380,22 +3379,22 @@ typedef struct _matrix {
 } matrix;
 
 void matrix_extract_row(const matrix *A, int index, uint8_t *vec_out){
-    memcpy(vec_out, A->content[index], A.ncols * sizeof(uint8_t));
+    memcpy(vec_out, A->content[index], A->ncols * sizeof(uint8_t));
 }
 
 void matrix_extract_col(const matrix *A, int index, uint8_t *vec_out){
-    for(int i = 0; i < A.nrows; i++){
+    for(int i = 0; i < A->nrows; i++){
         vec_out[i] = A->content[i][index];
     }
 }
 
-void vec_sum(const uint8_t *vec1, const uint8_t *vec2, const uint8_t *vec_out, uint8_t size){
+void vec_sum(const uint8_t *vec1, const uint8_t *vec2, uint8_t *vec_out, uint8_t size){
     for(int i = 0; i < size; i++){
         vec_out[i] = vec1[i] + vec2[i];
     }
 }
 
-void vec_diff(const uint8_t *vec1, const uint8_t *vec2, const uint8_t *vec_out, uint8_t size){
+void vec_diff(const uint8_t *vec1, const uint8_t *vec2, uint8_t *vec_out, uint8_t size){
     for(int i = 0; i < size; i++){
         vec_out[i] = vec1[i] - vec2[i];
     }
@@ -3427,7 +3426,7 @@ static void vec_key2vec(const PHYSEC_Key *k, uint8_t *vec_out){
     }
 }
 
-static void vec_vec2key(uint8_t *vec, const PHYSEC_Key *k_out){
+static void vec_vec2key(uint8_t *vec, PHYSEC_Key *k_out){
     
     int byte_index = -1;
     int in_byte_index;
@@ -3439,7 +3438,7 @@ static void vec_vec2key(uint8_t *vec, const PHYSEC_Key *k_out){
             byte_index++;
             in_byte_index = 0;
         }
-        k_out->key[byte_index] +=  << (7-in_byte_index);
+        k_out->key[byte_index] +=  vec[i] << (7-in_byte_index);
     }
     
 }
@@ -3495,20 +3494,20 @@ mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
 struct atom{
     int index;
     uint8_t atom[PHYSEC_CS_COMPRESSED_SIZE];
-}
+};
 
 struct atom_array{
     int not_used_atoms_nbr;
     struct atom atoms[PHYSEC_KEY_SIZE];
-}
+};
 
-static struct atom_array atom_array_init(matrix *A){
+static struct atom_array atom_array_init(const matrix *A){
     
     struct atom_array atoms;
 
     for(int i = 0; i<PHYSEC_KEY_SIZE; i++){
-        atoms[i].index = i;
-        matrix_extract_col(A, i, atoms[i].atom);
+        atoms.atoms[i].index = i;
+        matrix_extract_col(A, i, atoms.atoms[i].atom);
     }
 
     return atoms;
@@ -3516,8 +3515,8 @@ static struct atom_array atom_array_init(matrix *A){
 
 static void atom_array_mark_as_used(struct atom_array *atoms, int index){
     memcpy(
-        atoms->atoms[index],
-        atoms->atoms[atoms->not_used_atoms_nbr -1],
+        atoms->atoms+index,
+        atoms->atoms+(atoms->not_used_atoms_nbr -1),
         PHYSEC_CS_COMPRESSED_SIZE*sizeof(uint8_t)
     );
     atoms->not_used_atoms_nbr--;
@@ -3532,7 +3531,7 @@ static int atom_array_get_best_matching_atom_index(struct atom_array *atoms, uin
 
     for(int i = 0; i < atoms->not_used_atoms_nbr; i++){
         
-        dot_product = vec_dot_product(atoms->atoms[i], residual, PHYSEC_CS_COMPRESSED_SIZE);
+        dot_product = vec_dot_product(atoms->atoms[i].atom, residual, PHYSEC_CS_COMPRESSED_SIZE);
         if(dot_product > max){
             max = dot_product;
             max_index = i;
@@ -3622,7 +3621,7 @@ PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k, matrix *A
     mul_matrix_H(A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
 }
 
-static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, const uint8_t *x_out){
+static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, uint8_t *x_out){
     
     // Init key error
     memset(x_out, 0, PHYSEC_KEY_SIZE*sizeof(uint8_t));
@@ -3640,18 +3639,18 @@ static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, const ui
         vec_norm2(residual, PHYSEC_CS_COMPRESSED_SIZE) > PHYSEC_RECONCILIATION_EPS
     ){
 
-        best_matching_atom_index = atom_array_get_best_matching_atom_index(atoms, residual);
+        best_matching_atom_index = atom_array_get_best_matching_atom_index(&atoms, residual);
 
         x_out[best_matching_atom_index] = 1;
 
         vec_diff(
             residual,
-            atoms->atoms[best_matching_atom_index],
+            atoms.atoms[best_matching_atom_index].atom,
             residual,
             PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t)
         );
 
-        atom_array_mark_as_used(atoms, best_matching_atom_index);
+        atom_array_mark_as_used(&atoms, best_matching_atom_index);
 
     }
 
@@ -3660,7 +3659,7 @@ static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, const ui
 // --- The hight level function
 
 // --- --- For Bob
-static void PHYSEC_reconciliation_compute_compressed_key(const PHYSEC_Key *k, const uint8_t *y_out){
+static void PHYSEC_reconciliation_compute_compressed_key(const PHYSEC_Key *k, uint8_t *y_out){
     
     matrix A = compression_matrix_def();
 
@@ -3670,7 +3669,7 @@ static void PHYSEC_reconciliation_compute_compressed_key(const PHYSEC_Key *k, co
 }
 
 // --- --- For Alice
-static PHYSEC_Key PHYSEC_reconciliation_key(
+static PHYSEC_Key PHYSEC_reconciliate_key(
     const PHYSEC_Key *Alice_key,
     const uint8_t *Bob_compressed_key
 ){

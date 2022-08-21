@@ -77,6 +77,7 @@
 #include "machwdt.h"
 #include "str_utils.h"
 
+#include "modlora_physec_rec_mat.h"
 #endif
 
 #include "random.h"
@@ -325,8 +326,8 @@ typedef struct _PHYSEC_probe {
 
 typedef struct _PHYSEC_keygen {
     uint8_t dev_id[PHYSEC_DEV_ID_LEN];
-    //uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
-    PHYSEC_Key K;
+    uint8_t cs_vec[PHYSEC_CS_COMPRESSED_SIZE];
+    //PHYSEC_Key K;
     uint8_t MAC[PHYSEC_CS_MAC_SIZE];
 } __attribute__((__packed__)) PHYSEC_KeyGen;
 
@@ -2983,7 +2984,6 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
 
     double negatif_entropy = 0;
     double proba;
-    //int8_t nbr_bit;
 
     for(int i = 0; i < d->bin_nbr; i++){
         proba = d->values[i] * d->bins[i];
@@ -3544,11 +3544,114 @@ wait_probe(const uint8_t *id, PHYSEC_MeasureType mt, int8_t *rssi, uint32_t *dur
     return cnt;
 }
 
+// Reconciliation
+
+#define PHYSEC_RECONCILIATION_EPS 1.0
+
+// --- Elementery matrix operations
+
 typedef struct _matrix {
     uint8_t nrows;
     uint8_t ncols;
-    uint8_t **content;
+    uint8_t **content; // A row is a ncols array
 } matrix;
+
+void matrix_extract_row(const matrix *A, int index, uint8_t *vec_out){
+    memcpy(vec_out, A->content[index], A->ncols * sizeof(uint8_t));
+}
+
+void matrix_extract_col(const matrix *A, int index, uint8_t *vec_out){
+    for(int i = 0; i < A->nrows; i++){
+        vec_out[i] = A->content[i][index];
+    }
+}
+
+void vec_sum(const uint8_t *vec1, const uint8_t *vec2, uint8_t *vec_out, uint8_t size){
+    for(int i = 0; i < size; i++){
+        vec_out[i] = vec1[i] + vec2[i];
+    }
+}
+
+void vec_diff(const uint8_t *vec1, const uint8_t *vec2, uint8_t *vec_out, uint8_t size){
+    for(int i = 0; i < size; i++){
+        vec_out[i] = vec1[i] - vec2[i];
+    }
+}
+
+double vec_norm2(const uint8_t *vec, uint8_t size){
+    double norm = 0;
+    for(int i = 0; i < size; i++){
+        norm += (double) (vec[i] * vec[i]);
+    }
+    return sqrt(norm);
+}
+
+uint8_t vec_dot_product(const uint8_t *vec1, const uint8_t *vec2, uint8_t size){
+    
+    uint8_t res = 0;
+    
+    for(int i = 0; i < size; i++){
+        res += vec1[i]*vec2[i];
+    }
+
+    return res;
+}
+
+static void vec_key2vec(const PHYSEC_Key *k, uint8_t *vec_out){
+    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
+    {
+        vec_out[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
+    }
+}
+
+static void vec_vec2key(uint8_t *vec, PHYSEC_Key *k_out){
+    
+    int byte_index = -1;
+    int in_byte_index;
+
+    memset(k_out->key, 0, PHYSEC_KEY_SIZE_BYTES*sizeof(uint8_t));
+
+    for(int i = 0; i < PHYSEC_KEY_SIZE; i++){
+        if(i%8 == 0){
+            byte_index++;
+            in_byte_index = 0;
+        }
+        k_out->key[byte_index] +=  vec[i] << (7-in_byte_index);
+    }
+    
+}
+
+// defining compression matrix
+matrix compression_matrix_def(){
+
+    uint8_t A_1D_content[] = A_1D_CONTENT;
+
+    matrix A;
+    A.nrows = PHYSEC_CS_COMPRESSED_SIZE;
+    A.ncols = PHYSEC_KEY_SIZE;
+    A.content = malloc(PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t*));
+    
+    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++){
+
+        A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
+
+        for(int j = 0; j < PHYSEC_KEY_SIZE; j++){
+            printf("%d : %d\n", i, A_1D_content[i*PHYSEC_KEY_SIZE+j]);
+            A.content[i][j] = A_1D_content[i*PHYSEC_KEY_SIZE+j];
+        }
+    }
+
+    return A;
+};
+
+void compression_matrix_free(matrix A){
+    
+    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++){
+        free(A.content[i]);
+    }
+
+    free(A.content);
+};
 
 
 static void
@@ -3564,6 +3667,60 @@ mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
     }
 }
 
+// --- atom array
+
+struct atom{
+    int index;
+    uint8_t atom[PHYSEC_CS_COMPRESSED_SIZE];
+};
+
+struct atom_array{
+    int not_used_atoms_nbr;
+    struct atom atoms[PHYSEC_KEY_SIZE];
+};
+
+static struct atom_array atom_array_init(const matrix *A){
+    
+    struct atom_array atoms;
+
+    for(int i = 0; i<PHYSEC_KEY_SIZE; i++){
+        atoms.atoms[i].index = i;
+        matrix_extract_col(A, i, atoms.atoms[i].atom);
+    }
+
+    return atoms;
+}
+
+static void atom_array_mark_as_used(struct atom_array *atoms, int index){
+    memcpy(
+        atoms->atoms+index,
+        atoms->atoms+(atoms->not_used_atoms_nbr -1),
+        PHYSEC_CS_COMPRESSED_SIZE*sizeof(uint8_t)
+    );
+    atoms->not_used_atoms_nbr--;
+}
+
+static int atom_array_get_best_matching_atom_index(struct atom_array *atoms, uint8_t *residual){
+
+    int max_index = -1;
+    int max = -1;
+
+    uint8_t dot_product;
+
+    for(int i = 0; i < atoms->not_used_atoms_nbr; i++){
+        
+        dot_product = vec_dot_product(atoms->atoms[i].atom, residual, PHYSEC_CS_COMPRESSED_SIZE);
+        if(dot_product > max){
+            max = dot_product;
+            max_index = i;
+        }
+    
+    }
+
+    return max_index;
+}
+
+// Does nothing for now
 static void
 make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs_vec)
 {
@@ -3571,6 +3728,7 @@ make_diff_vector(uint8_t *diff_vec, const uint8_t *cs_vec, const uint8_t *pkt_cs
         diff_vec[i] = 0;
 }
 
+// Not used for now
 static void
 PHYSEC_reconciliate(const int8_t *diff_vec, PHYSEC_Key *k)
 {
@@ -3635,30 +3793,97 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA, float 
 }
 
 static void
-PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
+PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k, matrix *A)
 {
-    uint8_t k_vec[PHYSEC_KEY_SIZE] = { 0 };
-    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
-    {
-        k_vec[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
+    uint8_t k_vec[PHYSEC_KEY_SIZE];
+    vec_key2vec(k, k_vec);
+
+    mul_matrix_H(A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
+}
+
+static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, uint8_t *x_out){
+    
+    // Init key error
+    memset(x_out, 0, PHYSEC_KEY_SIZE*sizeof(uint8_t));
+
+    // Init residual
+    uint8_t residual[PHYSEC_CS_COMPRESSED_SIZE];
+    memcpy(residual, y, PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t));
+
+    // Init atom array
+    struct atom_array atoms = atom_array_init(A);
+    int best_matching_atom_index;
+
+    while(
+        atoms.not_used_atoms_nbr > 0 &&
+        vec_norm2(residual, PHYSEC_CS_COMPRESSED_SIZE) > PHYSEC_RECONCILIATION_EPS
+    ){
+
+        best_matching_atom_index = atom_array_get_best_matching_atom_index(&atoms, residual);
+
+        x_out[best_matching_atom_index] = 1;
+
+        vec_diff(
+            residual,
+            atoms.atoms[best_matching_atom_index].atom,
+            residual,
+            PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t)
+        );
+
+        atom_array_mark_as_used(&atoms, best_matching_atom_index);
+
     }
 
-    matrix A = {
-        .ncols = PHYSEC_KEY_SIZE,
-        .nrows = PHYSEC_CS_COMPRESSED_SIZE,
-        .content = malloc( PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t*))
-    };
-    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++)
-        A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
-
-    // set matrix A to random bernoulli
-
-    mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
-
-    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++)
-        free(A.content[i]);
-    free(A.content);
 }
+
+// --- The hight level function
+
+// --- --- For Bob
+static void PHYSEC_reconciliation_compute_compressed_key(const PHYSEC_Key *k, uint8_t *y_out){
+    
+    matrix A = compression_matrix_def();
+
+    PHYSEC_craft_reconciliate_vector(y_out, k, &A);
+
+    compression_matrix_free(A);
+}
+
+// --- --- For Alice
+static void PHYSEC_reconciliate_key(
+    const PHYSEC_Key *Alice_key,
+    const uint8_t *Bob_compressed_key,
+    PHYSEC_Key *outkey
+){
+    matrix A = compression_matrix_def();
+
+    uint8_t Alice_key_vec[PHYSEC_KEY_SIZE];
+    uint8_t Alice_compressed_key[PHYSEC_CS_COMPRESSED_SIZE];
+    uint8_t compressed_key_diff[PHYSEC_CS_COMPRESSED_SIZE];
+    uint8_t key_error[PHYSEC_KEY_SIZE];
+    PHYSEC_Key reconciliated_key;
+    uint8_t reconciliated_key_vec[PHYSEC_KEY_SIZE];
+
+    PHYSEC_craft_reconciliate_vector(Alice_compressed_key, Alice_key, &A);
+    vec_diff(Alice_compressed_key, Bob_compressed_key, compressed_key_diff, PHYSEC_CS_COMPRESSED_SIZE);
+    PHYSEC_compute_key_error(&A, compressed_key_diff, key_error);
+
+    // reconciliation
+    vec_key2vec(Alice_key, Alice_key_vec);
+    for(int i = 0; i<PHYSEC_KEY_SIZE; i++){
+        if(key_error[i]){
+            reconciliated_key_vec[i] = 1-Alice_key_vec[i];
+        }else{
+            reconciliated_key_vec[i] = Alice_key_vec[i];
+        }
+    }
+    vec_vec2key(reconciliated_key_vec, &reconciliated_key);
+
+    compression_matrix_free(A);
+
+    memcpy(outkey, &reconciliated_key, sizeof(PHYSEC_Key));
+}
+
+// END : Reconciliation
 
 static void
 PHYSEC_privacy_amplification(PHYSEC_Key *key)
@@ -3771,7 +3996,7 @@ send_rssis_2(const PHYSEC_Sync *sync, const int8_t *rssis, uint16_t cnt, int32_t
 
         memset((uint8_t*) &pkt, 0, sizeof(pkt));
         int n;
-        if ((n = lora_recv((uint8_t*) &pkt, pkt_hdr_siz, t_still, NULL)) > 0)
+        if ((n = lora_recv((uint8_t*) &pkt, sizeof(pkt), t_still, NULL)) > 0)
         {     
             physec_log(3, "<<<\n");
             physec_hexdump(3, (uint8_t*) &pkt, sizeof(pkt));
@@ -4111,7 +4336,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs
     uint16_t last_cnt_before_m_init = 0;
     uint16_t last_incomplete_window_size;
 
-    uint32_t cur_stage_start;
+    uint32_t cur_stage_start = 0;
     if (kgs)
         memset(kgs, 0, sizeof(PHYSEC_KeyGenStats));
 
@@ -4294,30 +4519,50 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs
 
         if (pkt_type == PHYSEC_PT_KEYGEN)
         {
+            PHYSEC_Key Kb = { 0 };
             PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen*) buf;
 
             physec_log(2, "<<< KEYGEN PKT RECEIVED - RECONCILIATION\n");
             physec_hexdump(3, (uint8_t*) kg_r, sizeof(PHYSEC_KeyGen));
             physec_log(2, "\n");
 
-            // compute vector and reconciliate
-            //uint8_t y_A[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-            //int8_t diff[PHYSEC_CS_COMPRESSED_SIZE] = { 0 };
-            //PHYSEC_craft_reconciliate_vector(y_A, (const PHYSEC_Key*) &P);
-            // fill kg_s->cs_vec with y = ybob - yalice
-            //make_diff_vector(kg_s->cs_vec, y_A, kg_r->cs_vec);
+            if (kgs)
+                cur_stage_start = mp_hal_ticks_ms();
+            PHYSEC_reconciliate_key(&key, kg_r->cs_vec, &Kb);
+            //PHYSEC_reconciliate_keys_with_debug(&(kg_r->K), &key, &(kgs->mismatch));
 
-            //PHYSEC_reconciliate((const int8_t*)diff, &P);     // reconciliated key
+            physec_log(1, "### KEYS RECONCILIATED\n");
+#if PHYSEC_DEBUG >= 2
+            uint32_t nmismatch = 0;
+            printf("dif: ");
+            for (int i=0; i<PHYSEC_KEY_SIZE; i++)
+            {
+                uint8_t cur_kb_bit = (Kb.key[i/8] >> (7-(i%8))) & 0x1;
+                uint8_t cur_ka_bit = (key.key[i/8] >> (7-(i%8))) & 0x1;
+                if ( cur_kb_bit != cur_ka_bit)
+                {
+                    printf("V");
+                    nmismatch++;
+                }
+                else {
+                    printf(" ");
+                }
+            }
+            printf("\nKB = ");
+            display_key_bits(&Kb);
+            printf("KA = ");
+            display_key_bits(&key);
+            printf("%% mismatch: %d/%d = %f\n", nmismatch, PHYSEC_KEY_SIZE, (float) nmismatch / (float) PHYSEC_KEY_SIZE);
+#endif
+            physec_log(1, "\n");
 
-            PHYSEC_reconciliate_keys_with_debug(&(kg_r->K), &key, &(kgs->mismatch));
-
-            physec_log2(2, "Entropy before PA: %f\n", entropy(key.key, key_len));
+            physec_log2(2, "Entropy before PA: %f\n", entropy(Kb.key, key_len));
 
             if (kgs)
-                kgs->entropy_pk = entropy(key.key, key_len);
+                kgs->entropy_pk = entropy(Kb.key, key_len);
 
 
-            if ( !verify_CS_MAC(&key, kg_r) )
+            if ( !verify_CS_MAC(&Kb, kg_r) )
                 continue;
             if (kgs)
             {
@@ -4532,9 +4777,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
                     physec_verb_section(3, display_key_bits(&P));
                     physec_log2(2, "Key entropy before PA: %f\n", entropy(P.key, PHYSEC_KEY_SIZE));
                     physec_log(1, "\n");
-                    //PHYSEC_craft_reconciliate_vector(kg_s->cs_vec, (const PHYSEC_Key*) &P);
 
-                    memcpy(&(kg_s->K), &P, sizeof(PHYSEC_Key));
+                    PHYSEC_reconciliation_compute_compressed_key((const PHYSEC_Key*) &P, kg_s->cs_vec);
+                    //memcpy(&(kg_s->K), &P, sizeof(PHYSEC_Key));
 
                     compute_CS_MAC(&P, kg_s);
 

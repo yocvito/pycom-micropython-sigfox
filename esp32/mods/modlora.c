@@ -264,6 +264,18 @@ typedef struct _PHYSEC_RssiMsrmts {
     float rssi_msrmts_delay;
 } PHYSEC_RssiMsrmts;
 
+typedef enum _PHYSEC_MeasureType {
+    PHYSEC_MT_NONE = 0,
+    PHYSEC_MT_RSSI,
+    PHYSEC_MT_SNR,
+} PHYSEC_MeasureType;
+
+typedef struct _PHYSEC_Measures {
+    uint16_t nb_val;
+    int8_t *values;
+    float delay;
+} PHYSEC_Measures;
+
 /*!
  * Structure to synchronize devices during key generation
  */
@@ -3362,7 +3374,7 @@ reschdl_last_rx_pkt(void)
  * \return PHYSEC_PacketType
  */
 static PHYSEC_PacketType
-wait_physec_kg_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *start_time, int8_t *rssi)
+wait_physec_kg_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t *start_time, PHYSEC_MeasureType mt, int8_t *m_val)
 {
     if (len < PHYSEC_MAX_PAYLOAD_SIZE)
         return PHYSEC_PT_NONE;
@@ -3380,7 +3392,7 @@ wait_physec_kg_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t
             PHYSEC_Packet *pkt = (PHYSEC_Packet*) buf;
             if (pkt->identifier != PHYSEC_KG_PKT_IDENTIFIER)
             {
-                //reschdl_last_rx_pkt();
+                reschdl_last_rx_pkt();
                 continue;
             }
 
@@ -3389,12 +3401,33 @@ wait_physec_kg_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t
                 case PHYSEC_PT_PROBE:
                 {
                     memcpy(retbuffer, &(pkt->payload), PHYSEC_PROBE_PAYLOAD_SIZE);
-                    if (rssi != NULL)
+                    if (m_val != NULL)
                     {
-                        if (lora_obj.rssi < INT8_MIN)
-                            *rssi = INT8_MAX;
-                        else
-                            *rssi = abs(lora_obj.rssi);
+                        switch (mt)
+                        {
+                            case PHYSEC_MT_RSSI:
+                            {
+                                if (lora_obj.rssi < INT8_MIN)
+                                    *m_val = INT8_MAX;
+                                else
+                                    *m_val = abs(lora_obj.rssi);
+                                break;
+                            }
+                            case PHYSEC_MT_SNR:
+                            {
+                                if (lora_obj.snr < INT8_MIN)
+                                    *m_val = INT8_MAX;
+                                else
+                                    *m_val = abs(lora_obj.snr);
+
+                                break;
+                            }
+                            default:
+                            {
+                                *m_val = 0;
+                                break;
+                            }
+                        }
                     }
                     return PHYSEC_PT_PROBE;
                 }
@@ -3470,7 +3503,7 @@ wait_physec_dbg_pkt(const PHYSEC_Sync *sync, uint8_t* retbuf, uint32_t len, int3
  * \return the probe number of the last received probe
  */
 static uint16_t
-wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
+wait_probe(const uint8_t *id, PHYSEC_MeasureType mt, int8_t *rssi, uint32_t *duration, int32_t timeout)
 {
     uint32_t start = mp_hal_ticks_ms();
     if (duration != NULL)
@@ -3489,7 +3522,7 @@ wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
                 *duration = timeout;
             break;
         }
-        if ((pt = wait_physec_kg_packet(buf, sizeof(buf), timeout-wtime, NULL, &rss)) == PHYSEC_PT_PROBE)
+        if ((pt = wait_physec_kg_packet(buf, sizeof(buf), timeout-wtime, NULL, mt, &rss)) == PHYSEC_PT_PROBE)
         {
             PHYSEC_Probe *p = (PHYSEC_Probe *) buf;
             if (memcmp(id, p->id, PHYSEC_DEV_ID_LEN) == 0)
@@ -3502,6 +3535,10 @@ wait_probe(const uint8_t *id, int8_t *rssi, uint32_t *duration, int32_t timeout)
                 break;
             }
         }
+        else if (pt != PHYSEC_PT_NONE)
+            reschdl_last_rx_pkt();
+
+
     }
 
     return cnt;
@@ -3734,7 +3771,7 @@ send_rssis_2(const PHYSEC_Sync *sync, const int8_t *rssis, uint16_t cnt, int32_t
 
         memset((uint8_t*) &pkt, 0, sizeof(pkt));
         int n;
-        if ((n = lora_recv((uint8_t*) &pkt, pkt_hdr_siz, t_still, NULL)) >= pkt_hdr_siz)
+        if ((n = lora_recv((uint8_t*) &pkt, pkt_hdr_siz, t_still, NULL)) > 0)
         {     
             physec_log(3, "<<<\n");
             physec_hexdump(3, (uint8_t*) &pkt, sizeof(pkt));
@@ -3756,6 +3793,8 @@ send_rssis_2(const PHYSEC_Sync *sync, const int8_t *rssis, uint16_t cnt, int32_t
 
             c_cnt++;
         }
+        else
+            reschdl_last_rx_pkt();
 
     }
 
@@ -3789,7 +3828,7 @@ receive_rssis_2(const PHYSEC_Sync *sync, int8_t *rssis, uint16_t cnt, int32_t ti
         bool rewind = false;
         int n;
         memset((uint8_t*) &pkt, 0, sizeof(pkt));
-        if ((n = lora_recv((uint8_t*) &pkt, sizeof(pkt), t_still, NULL)) >= pkt_hdr_siz)
+        if ((n = lora_recv((uint8_t*) &pkt, sizeof(pkt), t_still, NULL)) > 0)
         {         
             physec_log(3, "<<<\n");
             physec_hexdump(3, (uint8_t*) &pkt, sizeof(pkt));
@@ -3836,6 +3875,8 @@ receive_rssis_2(const PHYSEC_Sync *sync, int8_t *rssis, uint16_t cnt, int32_t ti
             if (c_cnt >= needed)
                 done = true;
         }
+        else
+            reschdl_last_rx_pkt();
     }
 
     return done;
@@ -4117,7 +4158,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs
             // wait probe response, verify and increment
             int8_t rssi = 0;
             uint32_t wtime = 0;
-            if ( wait_probe(sync->dev_id, &rssi, &wtime, lora_obj.physec_timeout) == cnt && wtime < lora_obj.physec_timeout)
+            if ( wait_probe(sync->dev_id, PHYSEC_MT_SNR, &rssi, &wtime, lora_obj.physec_timeout) == cnt && wtime < lora_obj.physec_timeout)
             {
                 last_delay = (mp_hal_ticks_ms()-probe_start) - toa(lora_obj.sf);
                 delay_sum += last_delay;
@@ -4242,7 +4283,14 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs
         PHYSEC_PacketType pkt_type = PHYSEC_PT_NONE;
         uint32_t kgstart = mp_hal_ticks_ms();
         uint32_t kgtime = 5000;
-        while ( ((pkt_type = wait_physec_kg_packet(buf, sizeof(buf), kgtime, NULL, NULL)) & (PHYSEC_PT_KEYGEN|PHYSEC_PT_RESET)) == 0 && (kgtime > (mp_hal_ticks_ms()-kgstart)) );
+        while ( (kgtime > (mp_hal_ticks_ms()-kgstart)) )
+        {
+            pkt_type = wait_physec_kg_packet(buf, sizeof(buf), kgtime, NULL, PHYSEC_MT_NONE, NULL);
+            if (pkt_type & (PHYSEC_PT_KEYGEN|PHYSEC_PT_RESET))
+                break;
+            else
+                reschdl_last_rx_pkt(); 
+        }
 
         if (pkt_type == PHYSEC_PT_KEYGEN)
         {
@@ -4348,7 +4396,6 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
     uint16_t last_cnt = 255;
     uint16_t cnt = 0;
     PHYSEC_Key P = { .key = { 0 } };
-    bool on_reset = false;
     uint32_t cur_stage_start;
     if (kgs)
         memset(kgs, 0, sizeof(PHYSEC_KeyGenStats));
@@ -4370,7 +4417,7 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
         uint8_t buf[PHYSEC_MAX_PAYLOAD_SIZE] = { 0 };
         uint32_t start = 0;
         int8_t rssi = 0;
-        switch ( wait_physec_kg_packet(buf, sizeof(buf), lora_obj.physec_timeout, &start, &rssi) )
+        switch ( wait_physec_kg_packet(buf, sizeof(buf), lora_obj.physec_timeout, &start, PHYSEC_MT_SNR, &rssi) )
         {
             case PHYSEC_PT_PROBE:
             {
@@ -4418,8 +4465,6 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
                         last_cnt = cnt;
                         cnt ++;
 
-                        if (on_reset)
-                            on_reset = false;
                     }
                 }
                 break;
@@ -4536,7 +4581,6 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
                     cnt = 0;
                     sum_delay = 0;
                     pkt.type = PHYSEC_PT_RESET;
-                    on_reset = true;
 
                     if (kgs)
                         kgs->n_retries++;
@@ -4559,19 +4603,6 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
             }
             default:
                 break;
-        }
-
-        if (on_reset)
-        {
-            PHYSEC_Packet pkt = {
-                .identifier = PHYSEC_KG_PKT_IDENTIFIER,
-                .type = PHYSEC_PT_RESET,
-                .payload = { 0 }
-            };
-
-            memcpy(pkt.payload, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
-
-            lora_send((const uint8_t*) &pkt, sizeof(pkt), -1);
         }
 
     }

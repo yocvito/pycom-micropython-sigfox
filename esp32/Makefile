@@ -143,6 +143,13 @@ ifeq ($(PHYSEC_ENABLED), 1)
     CFLAGS += -DPHYSEC
 endif
 
+ifneq ($(PHYSEC_DEBUG), 0)
+    $(info PHYSEC debug activated)
+    CFLAGS += -DPHYSEC_DEBUG=$(PHYSEC_DEBUG)
+else
+    CFLAGS += -DPHYSEC_DEBUG=0
+endif
+
 # Configure floating point support
 ifeq ($(MICROPY_FLOAT_IMPL),double)
 CFLAGS += -DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_DOUBLE

@@ -65,11 +65,18 @@
  *  PHYSEC includes
  */
 #ifdef PHYSEC
-#include "str_utils.h"
-#include "extmod/crypto-algorithms/sha256.c"
 #include <math.h>
+
+#include "extmod/vfs_posix.h"
+#include <fcntl.h>
+
+#include "extmod/crypto-algorithms/sha256.c"
 #include "lora/system/crypto/cmac.h"
 #include "extmod/uzlib/uzlib.h"
+
+#include "machwdt.h"
+#include "str_utils.h"
+
 #endif
 
 #include "random.h"
@@ -191,14 +198,18 @@ typedef enum {
 /*!
  * PHYSEC defines
  */
+#ifndef PHYSEC_DEBUG
+#define PHYSEC_DEBUG    0
+#endif          
 
-#define PHYSEC_DEBUG    1
+#define LOGFILE         "/sd/PHYSEC.log"
+
 
 // Device ID length for KEY GENERATION
 #define PHYSEC_KEYGEN_FREQUENCY     867900000
 #define PHYSEC_PROBE_TIMEOUT        500         // 500 ms
 #define PHYSEC_SYNC_WORD            0x67
-#define PHYSEC_PROBE_REC_TIMEOUT    5000
+#define PHYSEC_COHERENCE_TIME       25        // 0.423 / ((v/c) * f) 
 
 #define PHYSEC_KG_PKT_IDENTIFIER    (uint16_t) 0xe4b9
 #define PHYSEC_DT_PKT_IDENTIFIER    (uint16_t) 0xe5b9
@@ -209,22 +220,26 @@ typedef enum {
 // For now, if this value is changed, the code will not going to adapt.
 #define PHYSEC_KEY_SIZE             128
 // future update: need to handle bits key size which are not byte aligned
-#define PHYSEC_KEY_SIZE_BYTES       (int16_t) PHYSEC_KEY_SIZE / 8
+#define PHYSEC_KEY_SIZE_BYTES       (int16_t) (PHYSEC_KEY_SIZE / 8)
 
 #define PHYSEC_CS_COMPRESSED_SIZE   35
 #define PHYSEC_CS_MAC_SIZE          16
 
 #define PHYSEC_DEV_ID_LEN           4
-#define PHYSEC_PROBE_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+2 // cnt is 2 bytes
-#define PHYSEC_KEYGEN_PAYLOAD_SIZE  1+PHYSEC_DEV_ID_LEN+PHYSEC_CS_COMPRESSED_SIZE+PHYSEC_CS_MAC_SIZE
+#define PHYSEC_PROBE_PAYLOAD_SIZE   (PHYSEC_DEV_ID_LEN+2) // cnt is 2 bytes
+#define PHYSEC_KEYGEN_PAYLOAD_SIZE  (1+PHYSEC_DEV_ID_LEN+PHYSEC_CS_COMPRESSED_SIZE+PHYSEC_CS_MAC_SIZE)
+#define PHYSEC_PKT_HEADER_SIZE      (2 + 1)
 #define PHYSEC_MAX_PAYLOAD_SIZE     PHYSEC_KEYGEN_PAYLOAD_SIZE
+#if PHYSEC_DEBUG >= 2
+#define PHYSEC_DEBUG_HEADER_SIZE        (PHYSEC_DEV_ID_LEN + 2)
+#define PHYSEC_DEBUG_PAYLOAD_SIZE       (PHYSEC_MAX_PAYLOAD_SIZE-PHYSEC_DEBUG_HEADER_SIZE-5)
+#endif
 // should be equal to sizeof(PHYSEC_packet)
 #define PHYSEC_MAX_PKT_SIZE         3+PHYSEC_MAX_PAYLOAD_SIZE
 
 #define PHYSEC_PROBE_RECONCIL_PAYLOAD_SIZE   PHYSEC_DEV_ID_LEN+1+PHYSEC_N_MAX_MEASURE
 
 #define PHYSEC_DATA_PKT_MAX_SIZE    LORA_PAYLOAD_SIZE_MAX-6
-
 
 /*!
  *  PHYSEC data structures
@@ -263,7 +278,9 @@ typedef enum _PHYSEC_packet_type {
     PHYSEC_PT_KEYGEN = 1,
     PHYSEC_PT_PROBE = 2,
     PHYSEC_PT_RESET = 4,
-
+#if PHYSEC_DEBUG >= 2
+    PHYSEC_PT_DEBUG = 8,
+#endif
     PHYSEC_PT_MAX = 255
 } PHYSEC_PacketType;
 
@@ -309,6 +326,29 @@ typedef struct _PHYSEC_DataPkt {
     uint8_t data[PHYSEC_DATA_PKT_MAX_SIZE];
 } __attribute__((__packed__)) PHYSEC_DataPkt;
 
+#if PHYSEC_DEBUG >= 2
+typedef struct _PHYSEC_DebugPayload {
+    uint8_t id[PHYSEC_DEV_ID_LEN];
+    int8_t n_rssi;
+    uint8_t cnt;
+    int8_t rssis[PHYSEC_DEBUG_PAYLOAD_SIZE];
+} __attribute__((__packed__)) PHYSEC_DebugPayload;
+#endif
+
+typedef struct _PHYSEC_KeyGenStats {
+    float total;            // total duration
+    float measure;          // measure duration
+    float signal_process;   // signal processing duration
+    float quantization;     // quantization duration
+    float reconciliation;   // reconciliation duration
+    float privacy_amp;      // privacy amplification duration
+    float mismatch;         // mismatch percentage
+    float entropy_pk;       // key entropy before privacy amplification
+    float entropy_k;        // key entropy after PA
+    uint16_t n_measures;      // nb measures
+    uint8_t n_retries;        // nb reset by Bob
+    uint32_t avg_delay;
+} PHYSEC_KeyGenStats;
 
 struct density {
     int8_t q_0;
@@ -643,7 +683,7 @@ static bool lorawan_nvs_open (void) {
         // initialize the value to 0
         nvs_set_u32(modlora_nvs_handle, "JOINED", false);
         if (ESP_OK != nvs_commit(modlora_nvs_handle)) {
-            return false;
+            return false; 
         }
     }
     return true;
@@ -1811,7 +1851,7 @@ static int32_t lora_send (const byte *buf, uint32_t len, uint32_t timeout_ms) {
 }
 
 static int32_t lora_recv (byte *buf, uint32_t len, int32_t timeout_ms, uint32_t *port) {
-    lora_rx_data_t rx_data;
+    lora_rx_data_t rx_data = { .port = 1 };
 
     if (timeout_ms < 0) {
         // blocking mode
@@ -2392,6 +2432,9 @@ STATIC mp_obj_t lora_sf (mp_uint_t n_args, const mp_obj_t *args) {
         lora_cmd_data_t cmd_data;
         uint8_t sf = mp_obj_get_int(args[1]);
         lora_validate_sf(sf);
+#ifdef PHYSEC
+        self->physec_timeout = PHYSEC_PROBE_TIMEOUT + toa(sf);
+#endif
         lora_get_config (&cmd_data);
         cmd_data.info.init.sf = sf;
         cmd_data.cmd = E_LORA_CMD_INIT;
@@ -2704,11 +2747,23 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(lora_reset_obj, lora_reset);
 /*!
  *  PHYSEC core & utils functions
  */
+/*
+static void
+logging(const uint8_t *buf, const size_t size)
+{
+    mp_obj_vfs_posix_file_t *file = mp_vfs_posix_file_open(&mp_type_vfs_posix_textio, mp_obj_new_str(LOGFILE, strlen(LOGFILE)), mp_obj_new_str("a+", 3));
 
+    int err;
+    mp_type_vfs_posix_fileio.protocol.write(file, buf, size, &err);
+
+
+}
+*/
 // Reciprocity enhancement
 
 // --- Filtering
 
+static
 void PHYSEC_golay_filter(PHYSEC_RssiMsrmts *rssi_msermts){
 
     int8_t coef[] = {-3, 12, 17, 12, -3};
@@ -2740,7 +2795,8 @@ void PHYSEC_golay_filter(PHYSEC_RssiMsrmts *rssi_msermts){
 
 // --- Interpolation
 
-void PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
+static
+void  PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
 
     int8_t interpolated_rssi_msrmts[rssi_msermts->nb_msrmts];
 
@@ -2770,6 +2826,7 @@ void PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
 
 #define PHYSEC_QUNTIFICATION_WINDOW_LEN 10
 
+static
 void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_window_size){
 
     if(rssi_window_size <= 1){
@@ -2809,6 +2866,7 @@ void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_wind
 
 // ---> Density function estimation
 
+static
 struct density PHYSEC_quntification_get_density(int8_t *rssi_window){
 
     struct density d;
@@ -2858,6 +2916,7 @@ struct density PHYSEC_quntification_get_density(int8_t *rssi_window){
 
 }
 
+static
 void PHYSEC_quntification_free_density(struct density *d){
     free(d->bins);
     free(d->values);
@@ -2866,10 +2925,13 @@ void PHYSEC_quntification_free_density(struct density *d){
 /*
     CDF : cumulative distribution function
 */
+static
 int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
 
     if(cdf < 0 || cdf > 1){
+#if PHYSEC_DEBUG >= 1
         fprintf(stderr, "PHYSEC_quntification_inverse_density : cdf isn't between 0 and 1.\n");
+#endif
         return -1;
     }
 
@@ -2892,12 +2954,12 @@ int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
 
 // <--- Density function estimation
 
-
+static
 int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
 
     double negatif_entropy = 0;
     double proba;
-    int8_t nbr_bit;
+    //int8_t nbr_bit;
 
     for(int i = 0; i < d->bin_nbr; i++){
         proba = d->values[i] * d->bins[i];
@@ -2914,6 +2976,7 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
         level index strating from 1.
         0 : in case of error
 */
+static
 unsigned char PHYSEC_quntification_get_level(
     int8_t rssi,
     int8_t *threshold_starts,
@@ -2936,10 +2999,12 @@ unsigned char PHYSEC_quntification_get_level(
         number of generated bit (from left)
         key_output = 128 bits = 16 bytes = a 16-uint8_t-table.
 */
+static
 int PHYSEC_quntification(
     PHYSEC_RssiMsrmts *rssi_msermts,
     double data_to_band_ration,
-    uint8_t *key_output
+    uint8_t *key_output,
+    PHYSEC_KeyGenStats *kgs
 ){
 
     uint8_t nbr_of_generated_bits_by_char = 0, key_char_index = 0;
@@ -2951,11 +3016,19 @@ int PHYSEC_quntification(
 
 
     // filtering
+
+    uint32_t cur_start;
+    if (kgs)
+        cur_start = mp_hal_ticks_ms();
     PHYSEC_golay_filter(rssi_msermts);
 
     // same time measure estimation
     PHYSEC_interpolation(rssi_msermts);
+    if (kgs)
+        kgs->signal_process =  ((float) mp_hal_ticks_ms()-(float)cur_start) / 1000.0;
 
+    if (kgs)
+        cur_start = mp_hal_ticks_ms();
     // preaparing for key generation
     memset(key_output, 0, 16*sizeof(uint8_t));
     unsigned char level;
@@ -3016,6 +3089,9 @@ int PHYSEC_quntification(
         nbr_of_processed_windows++;
         rssi_window_align_index = (uint16_t)(nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN);
     }
+
+    if (kgs)
+        kgs->quantization = ((float)mp_hal_ticks_ms()-(float)cur_start) / 1000.0;
 
     return 8*key_char_index+nbr_of_generated_bits_by_char;
 
@@ -3131,7 +3207,7 @@ void PHYSEC_signal_processing_test(){
     M2.rssi_msrmts_delay = 12;
 
     uint8_t generated_key[16];
-    int generated_key_len = PHYSEC_quntification(&M2, 0.1, generated_key);
+    int generated_key_len = PHYSEC_quntification(&M2, 0.1, generated_key, NULL);
 
     printf("Qunatification :\n");
     printf("\tkey len : %d bits\n", generated_key_len);
@@ -3231,7 +3307,7 @@ void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
 // END : Key gen Policy
 
 /**
- * @brief Returns an approximate toa for a specified SF
+ * @brief Returns an approximate toa (for a 6 bytes packet) for a specified SF
  *
  * @param sf    spreading factor used
  * @return uint16_t
@@ -3241,15 +3317,15 @@ toa(uint8_t sf)
 {
     switch(sf) {
         case 7:
-            return 41;
+            return 36;
         case 8:
-            return 72;
+            return 62;
         case 9:
-            return 144;
+            return 124;
         case 10:
-            return 289;
+            return 248;
         case 11:
-            return 578;
+            return 496;
         case 12:
             return 991;
     }
@@ -3318,6 +3394,43 @@ wait_physec_kg_packet(uint8_t *retbuffer, size_t len, uint32_t timeout, uint32_t
 
     return PHYSEC_PT_NONE;
 }
+
+#if PHYSEC_DEBUG >= 2
+static bool
+wait_physec_dbg_pkt(const PHYSEC_Sync *sync, uint8_t* retbuf, uint32_t len, int32_t timeout)
+{ 
+    if (len < sizeof(PHYSEC_DebugPayload))
+        return PHYSEC_PT_NONE;
+
+    uint32_t start = mp_hal_ticks_ms();
+    uint32_t wtime = 0;
+    uint8_t buf[PHYSEC_MAX_PKT_SIZE] = { 0 };
+    // wait packet
+    while (timeout == -1 || (wtime = mp_hal_ticks_ms()-start) < timeout)
+    {
+        if (lora_recv(buf, PHYSEC_MAX_PKT_SIZE, (timeout == -1) ? timeout : timeout-wtime, NULL) == PHYSEC_MAX_PKT_SIZE)
+        {
+            hexdump((uint8_t*) buf, sizeof(buf));
+
+            PHYSEC_Packet *pkt = (PHYSEC_Packet*) buf;
+            if (pkt->identifier != PHYSEC_KG_PKT_IDENTIFIER)
+                continue;
+
+            if (pkt->type != PHYSEC_PT_DEBUG)
+                continue;
+
+            PHYSEC_DebugPayload *dp = (PHYSEC_DebugPayload*) pkt->payload;
+            if (memcmp(sync->dev_id, dp->id, PHYSEC_DEV_ID_LEN) != 0)
+                continue;
+
+            memcpy(retbuf, dp, sizeof(PHYSEC_DebugPayload));
+            return true;
+        }
+    }
+
+    return false;
+}
+#endif
 
 /**
  * \brief wait for the reception of a PHYSEC probe destinated to id
@@ -3426,10 +3539,10 @@ display_key_bits(const PHYSEC_Key *K)
 }
 
 static void
-PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
+PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA, float *mismatch)
 {
     PHYSEC_Key tmp = { 0 };
-    uint8_t diff_cnt = 0;
+    //uint8_t diff_cnt = 0;
     printf("dif: ");
     uint32_t nmismatch = 0;
     for (int i=0; i<PHYSEC_KEY_SIZE; i++)
@@ -3451,6 +3564,8 @@ PHYSEC_reconciliate_keys_with_debug(const PHYSEC_Key *KB, PHYSEC_Key *KA)
     printf("KA = ");
     display_key_bits(KA);
     printf("%% mismatch: %d/%d = %f\n", nmismatch, PHYSEC_KEY_SIZE, (float) nmismatch / (float) PHYSEC_KEY_SIZE);
+    if (mismatch)
+        *mismatch = (float) nmismatch / (float) PHYSEC_KEY_SIZE;
     memcpy(KA, KB, sizeof(PHYSEC_Key));
 }
 
@@ -3474,6 +3589,10 @@ PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k)
     // set matrix A to random bernoulli
 
     mul_matrix_H(&A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
+
+    for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++)
+        free(A.content[i]);
+    free(A.content);
 }
 
 static void
@@ -3488,7 +3607,7 @@ PHYSEC_privacy_amplification(PHYSEC_Key *key)
 }
 
 static void
-display_rssi(int8_t *rssis, uint16_t len)
+display_rssi(const int8_t *rssis, uint16_t len)
 {
     printf("[ \n");
     for (uint16_t i=0; i<len; i++)
@@ -3538,7 +3657,7 @@ verify_CS_MAC(const PHYSEC_Key *K, const PHYSEC_KeyGen *kg)
     memcpy(&tmp, kg, sizeof(PHYSEC_KeyGen)-PHYSEC_CS_MAC_SIZE);
     compute_CS_MAC(K, &tmp);
 
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 3
     printf("AES_CMAC compare\n");
     hexdump(tmp.MAC, 16);
     hexdump(kg->MAC, 16);
@@ -3547,8 +3666,370 @@ verify_CS_MAC(const PHYSEC_Key *K, const PHYSEC_KeyGen *kg)
     return (memcmp(tmp.MAC, kg->MAC, PHYSEC_CS_MAC_SIZE) == 0);
 }
 
+#if PHYSEC_DEBUG >= 2
+static bool 
+send_rssis_2(const PHYSEC_Sync *sync, const int8_t *rssis, uint16_t cnt, int32_t timeout)
+{
+    uint32_t pkt_hdr_siz = 3 + PHYSEC_DEV_ID_LEN + 2;
+
+    uint32_t wtime = 0;
+
+    PHYSEC_Packet pkt = { 0 };
+    pkt.identifier = PHYSEC_KG_PKT_IDENTIFIER;
+    pkt.type = PHYSEC_PT_DEBUG;
+    PHYSEC_DebugPayload * ptmp = (PHYSEC_DebugPayload*) &(pkt.payload); 
+    uint8_t needed =  cnt / PHYSEC_DEBUG_PAYLOAD_SIZE;
+
+    if ( (cnt % PHYSEC_DEBUG_PAYLOAD_SIZE) > 0)
+        needed ++;
+
+    uint32_t start = mp_hal_ticks_ms();
+    for (uint8_t c_cnt=0; c_cnt<needed; )
+    {
+
+        wtime = mp_hal_ticks_ms()-start;
+        if (wtime >= timeout && timeout != -1)
+            return false;
+        int32_t t_still = (timeout == -1) ? -1 : timeout - wtime;
+
+        uint16_t n_to_copy = (c_cnt == needed-1) ?  cnt - c_cnt*PHYSEC_DEBUG_PAYLOAD_SIZE : PHYSEC_DEBUG_PAYLOAD_SIZE;
+
+        pkt.identifier = PHYSEC_KG_PKT_IDENTIFIER;
+        pkt.type = PHYSEC_PT_DEBUG;
+        memcpy(ptmp->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+        ptmp->n_rssi = n_to_copy;
+        ptmp->cnt = c_cnt;
+        memcpy(ptmp->rssis, rssis + c_cnt*PHYSEC_DEBUG_PAYLOAD_SIZE, n_to_copy * sizeof(int8_t));
+
+#if PHYSEC_DEBUG >= 3
+        printf(">>>\n");
+        hexdump((uint8_t*) &pkt, sizeof(pkt));
+#endif
+        lora_send((const uint8_t*) &pkt, sizeof(pkt), 0);
+
+        memset((uint8_t*) &pkt, 0, sizeof(pkt));
+        int n;
+        if ((n = lora_recv((uint8_t*) &pkt, pkt_hdr_siz, 50, NULL)) >= pkt_hdr_siz)
+        {     
+#if PHYSEC_DEBUG >= 3
+            printf("<<<\n");
+            hexdump((uint8_t*) &pkt, sizeof(pkt));
+#endif       
+            if (pkt.identifier != PHYSEC_KG_PKT_IDENTIFIER || pkt.type != PHYSEC_PT_DEBUG)
+                continue;
+            
+            if (memcmp(ptmp->id, sync->dev_id, PHYSEC_DEV_ID_LEN) != 0)
+                continue;
+
+            if (ptmp->cnt != c_cnt)
+                continue;
+
+            c_cnt++;
+        }
+
+    }
+
+    return true;
+}
+
+static bool
+receive_rssis_2(const PHYSEC_Sync *sync, int8_t *rssis, uint16_t cnt, int32_t timeout)
+{
+    uint32_t pkt_hdr_siz = 3 + PHYSEC_DEV_ID_LEN + 2;
+
+    PHYSEC_Packet pkt = { 0 };
+    uint8_t c_cnt = 0; 
+    uint8_t needed = cnt / PHYSEC_DEBUG_PAYLOAD_SIZE; 
+
+    if ( (cnt % PHYSEC_DEBUG_PAYLOAD_SIZE) > 0)
+        needed ++;
+
+    int32_t wtime = 0;
+    uint32_t start = mp_hal_ticks_ms();
+    bool done = false;
+    PHYSEC_DebugPayload *ptmp = (PHYSEC_DebugPayload *) &(pkt.payload);
+
+    while ( !done )
+    {
+        wtime = mp_hal_ticks_ms()-start;
+        if (wtime > timeout && timeout != -1)
+            break;
+        uint32_t t_still = (timeout == -1) ? -1 : timeout - wtime;
+        
+        bool rewind = false;
+        int n;
+        memset((uint8_t*) &pkt, 0, sizeof(pkt));
+        if ((n = lora_recv((uint8_t*) &pkt, sizeof(pkt), t_still, NULL)) >= pkt_hdr_siz)
+        {         
+#if PHYSEC_DEBUG >= 3
+            printf("<<<\n");
+            hexdump((uint8_t*) &pkt, sizeof(pkt));
+#endif
+
+            if (pkt.identifier != PHYSEC_KG_PKT_IDENTIFIER || pkt.type != PHYSEC_PT_DEBUG)
+                continue;
+            
+            if (memcmp(ptmp->id, sync->dev_id, PHYSEC_DEV_ID_LEN) != 0)
+                continue;
+
+            if (ptmp->cnt == c_cnt-1)
+            {
+                c_cnt--;
+                rewind = true;
+            }
+
+            if (ptmp->cnt != c_cnt)
+            {
+                rewind = false;
+                continue;
+            }
+
+            if (!rewind)
+                memcpy(rssis + c_cnt * PHYSEC_DEBUG_PAYLOAD_SIZE, ptmp->rssis, ptmp->n_rssi * sizeof(int8_t));
+            else
+                rewind = false;
+            c_cnt ++;
+
+            pkt.identifier = PHYSEC_KG_PKT_IDENTIFIER;
+            pkt.type = PHYSEC_PT_DEBUG;
+            memcpy(ptmp->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+
+#if PHYSEC_DEBUG >= 3
+            printf(">>>\n");
+            hexdump((uint8_t*) &pkt, sizeof(pkt));
+#endif
+            lora_send((uint8_t*) &pkt, sizeof(pkt), 0);
+
+            if (c_cnt >= needed)
+                done = true;
+        }
+    }
+
+    return done;
+}
+/*
+static void 
+send_rssis(const PHYSEC_Sync *sync, const int8_t *rssis, uint16_t cnt, int32_t timeout)
+{
+    PHYSEC_Packet pkt = {
+        .identifier = PHYSEC_KG_PKT_IDENTIFIER,
+        .type = PHYSEC_PT_DEBUG,
+        .payload = { 0 }
+    };
+    PHYSEC_DebugPayload *payload = (PHYSEC_DebugPayload*) &(pkt.payload);
+
+    uint32_t very_start = mp_hal_ticks_ms();
+    int32_t n_rssi = 0;
+    do {
+
+        memcpy(payload->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+        memset(payload->rssis, 0xff, PHYSEC_DEBUG_PAYLOAD_SIZE);
+        uint32_t start = mp_hal_ticks_ms();
+        payload->n_rssi = -1;
+        PHYSEC_DebugPayload *ptmp = NULL;
+        int32_t wtime;
+        do 
+        {
+            wtime = timeout - (mp_hal_ticks_ms()-start);
+            if (wtime <= 0)
+                return;
+            lora_send((uint8_t*) &pkt, sizeof(PHYSEC_Packet)-PHYSEC_DEBUG_PAYLOAD_SIZE, 0);
+
+            PHYSEC_Packet tmp = { 0 };
+            if (lora_recv((uint8_t*) &tmp, sizeof(PHYSEC_Packet), wtime, NULL) <= 0)
+                continue;
+            
+            if (tmp.identifier != PHYSEC_KG_PKT_IDENTIFIER || tmp.type != PHYSEC_PT_DEBUG)
+                continue;
+            
+            ptmp = (PHYSEC_DebugPayload *) &(tmp.payload);
+            
+            if (memcmp(ptmp->id, sync->dev_id, PHYSEC_DEV_ID_LEN) != 0)
+                continue;
+
+            n_rssi = ptmp->n_rssi;
+
+        } while (n_rssi != -1) ;
+
+        printf("### SENDING RSSI TO ALICE\n\n");
+
+        for (int i=0; i < (cnt / PHYSEC_DEBUG_PAYLOAD_SIZE) +1; i++)
+        {
+            int still = (cnt - i*PHYSEC_DEBUG_PAYLOAD_SIZE);
+            if (still < 0)
+                still = cnt;
+            memset(&(payload->n_rssi), 0, sizeof(PHYSEC_DebugPayload)-PHYSEC_DEV_ID_LEN); // set all the struct to 0 except ID
+            
+            if (i == (cnt / PHYSEC_DEBUG_PAYLOAD_SIZE))
+            {
+                if ((cnt % PHYSEC_DEBUG_PAYLOAD_SIZE) == 0)
+                    break;
+
+                payload->n_rssi = still;
+            }
+            else 
+                payload->n_rssi = PHYSEC_DEBUG_PAYLOAD_SIZE;
+
+            memcpy(payload->rssis, &rssis[i*PHYSEC_DEBUG_PAYLOAD_SIZE], payload->n_rssi * sizeof(int8_t));
+    #if PHYSEC_DEBUG >= 3
+            hexdump((uint8_t*) &pkt, sizeof(PHYSEC_Packet));
+    #endif
+            lora_send((const uint8_t*)&pkt, sizeof(PHYSEC_Packet), 0);
+        }
+
+        n_rssi = 0;
+
+            memset(&pkt, 0, sizeof(PHYSEC_Packet));
+            pkt.identifier = PHYSEC_KG_PKT_IDENTIFIER;
+            pkt.type = PHYSEC_PT_DEBUG;
+            PHYSEC_DebugPayload *p = (PHYSEC_DebugPayload*) &(pkt.payload);
+            memcpy(p->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+            p->n_rssi = -2;
+            lora_send((uint8_t*) &pkt, sizeof(PHYSEC_Packet)-PHYSEC_DEBUG_PAYLOAD_SIZE, 0);
+
+                start = mp_hal_ticks_ms();
+        do
+        {
+            memset(&pkt, 0, sizeof(PHYSEC_Packet));
+            wtime = timeout - (mp_hal_ticks_ms()-start);
+            if (wtime <= 0)
+                return;
+
+            if (lora_recv((uint8_t*) &pkt, sizeof(PHYSEC_Packet), wtime, NULL) <= 0)
+                continue;
+
+            if (pkt.identifier != PHYSEC_KG_PKT_IDENTIFIER || pkt.type != PHYSEC_PT_DEBUG)
+                continue;
+            
+            PHYSEC_DebugPayload *p = (PHYSEC_DebugPayload *) &(pkt.payload);
+            
+            if (memcmp(p->id, sync->dev_id, PHYSEC_DEV_ID_LEN) != 0)
+                continue;
+
+            n_rssi = p->n_rssi;
+
+        } while (n_rssi != -1 || n_rssi != -2);
+        
+
+    } while (n_rssi != -2 && (mp_hal_ticks_ms()-very_start) < timeout);
+}
+
+static bool
+receive_rssis(const PHYSEC_Sync *sync, int8_t *rssis, uint16_t cnt, int32_t timeout)
+{
+    PHYSEC_Packet pkt = { 0 };
+
+    uint16_t done = 0;
+    uint32_t start = mp_hal_ticks_ms();
+    int32_t wtime = timeout;
+   // bool started = false;
+    do
+    {
+        memset(&pkt, 0, sizeof(PHYSEC_Packet));
+        int32_t n = 0;
+        wtime = timeout-(mp_hal_ticks_ms()-start);
+        if (wtime <= 0)
+            return false;
+        if ((n = lora_recv((uint8_t*) &pkt, sizeof(PHYSEC_Packet), wtime, NULL)) <= 0)
+            continue;
+
+#if PHYSEC_DEBUG >= 3
+        hexdump((uint8_t*) &pkt, sizeof(PHYSEC_Packet));
+#endif
+
+        if (pkt.identifier != PHYSEC_KG_PKT_IDENTIFIER || pkt.type != PHYSEC_PT_DEBUG)
+            continue;
+
+        PHYSEC_DebugPayload *payload = (PHYSEC_DebugPayload*) &(pkt.payload);
+        if (memcmp(sync->dev_id, payload->id, PHYSEC_DEV_ID_LEN) != 0)
+            continue;
+
+        if (payload->n_rssi == -1)
+        {   
+            
+            memcpy(payload->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+            lora_send((uint8_t*) &pkt, sizeof(PHYSEC_Packet)-PHYSEC_DEBUG_PAYLOAD_SIZE, 0);
+            printf("### RECEIVING RSSI FROM BOB\n");
+            done = 0;
+        }
+        else if (payload->n_rssi == -2)
+        {
+            memset(&pkt, 0, sizeof(PHYSEC_Packet));
+            pkt.identifier = PHYSEC_KG_PKT_IDENTIFIER;
+            pkt.type = PHYSEC_PT_DEBUG;
+            PHYSEC_DebugPayload *p = (PHYSEC_DebugPayload*) &(pkt.payload);
+            memcpy(p->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+            p->n_rssi = -1;
+            lora_send((uint8_t*) &pkt, sizeof(PHYSEC_Packet)-PHYSEC_DEBUG_PAYLOAD_SIZE, 0);
+        }
+        else
+        {
+            if (done + payload->n_rssi > cnt)
+                payload->n_rssi =  (cnt-done);
+
+            memcpy(rssis + done, payload->rssis, payload->n_rssi * sizeof(int8_t));
+            done += payload->n_rssi;
+            printf("RSSIS:\n");
+            hexdump((uint8_t*) rssis, done);
+            printf("done=%d--cnt=%d\n", done, cnt);
+        }
+    } while ( done < cnt );
+
+    memset(&pkt, 0, sizeof(PHYSEC_Packet));
+    pkt.identifier = PHYSEC_KG_PKT_IDENTIFIER;
+    pkt.type = PHYSEC_PT_DEBUG;
+    PHYSEC_DebugPayload *p = (PHYSEC_DebugPayload*) &(pkt.payload);
+    memcpy(p->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+    p->n_rssi = -2;
+    lora_send((uint8_t*) &pkt, sizeof(PHYSEC_Packet)-PHYSEC_DEBUG_PAYLOAD_SIZE, 0);
+
+    return true;
+}
+*/
+static bool
+rssi_diff_infos(const PHYSEC_Sync *sync, const int8_t *rssis, uint16_t cnt)
+{
+    int8_t *rmt_rssis = calloc(cnt, sizeof(int8_t));
+
+    if (receive_rssis_2(sync, rmt_rssis, cnt, 5000) )
+    {
+        uint16_t n_mismatch = 0;
+        uint16_t n_mismatch_large = 0;
+        printf("### RSSI DIFFERENCE\n\n");
+        printf("[cnt]\tRss(Alice)\t-\tRss(Bob)\n");
+        for (int i=0; i<cnt; i++)
+        {
+            printf("[%d]\t%d\t\t-\t%d", i, rssis[i], rmt_rssis[i]);
+            if (rssis[i] != rmt_rssis[i])
+            {
+                printf("\tM");
+                n_mismatch++;
+            }
+            if ( abs(rmt_rssis[i]-rssis[i]) > 2)
+            {
+                printf("M");
+                n_mismatch_large++;
+            }
+            printf("\n");
+        }
+        printf("\n");
+        printf("%% mismatch (M) %d/%d = %f\n", n_mismatch, cnt, (float) n_mismatch / (float) cnt);
+        printf("%% mismatch large (MM) %d/%d = %f\n", n_mismatch_large, cnt, (float) n_mismatch_large / (float) cnt);
+
+        free(rmt_rssis);
+        return true;
+    }
+    else
+        printf("%s: Rssi exchange aborted !\n", __func__);    
+
+
+    free(rmt_rssis);
+    return false;
+}
+#endif
+
 static void
-initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
+initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
 {
     bool generated = false;
     PHYSEC_Key key = { 0 };
@@ -3556,20 +4037,30 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
     uint16_t last_cnt_before_m_init = 0;
     uint16_t last_incomplete_window_size;
 
+    uint32_t cur_stage_start;
+    if (kgs)
+        memset(kgs, 0, sizeof(PHYSEC_KeyGenStats));
+
     PHYSEC_Key P;
     int32_t nbits;
 
-    int8_t *rssis = calloc(sizeof(int8_t), PHYSEC_N_MAX_MEASURE);
+    int8_t *rssis = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t));
+#if PHYSEC_DEBUG >= 2
+    int8_t *raw_rssis = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t));
+#endif
     uint16_t n_required = PHYSEC_N_REQUIRED_MEASURE;
-    PHYSEC_RssiMsrmts m = {
-        .nb_msrmts = 0,
-        .rssi_msrmts = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t)), // alloc failure is already caught by micro python
-        .rssi_msrmts_delay = 0
-    };
+    PHYSEC_RssiMsrmts m = { 0 };
+    m.rssi_msrmts = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t)); // alloc failure is already caught by micro python
+    
+    
     uint16_t cnt = 0;
-
+    uint32_t probe_start = 0;
+    uint32_t delay_sum = 0;
+    uint32_t last_delay = 0;
     while ( !generated )
     {
+        if (kgs)
+            cur_stage_start = mp_hal_ticks_ms();
         while ( cnt < n_required)
         {
             // send probe
@@ -3582,7 +4073,9 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             memcpy(probe->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
             probe->cnt = cnt;
             lora_send((uint8_t*) &pkt, sizeof(pkt), -1);
-            #if PHYSEC_DEBUG
+            probe_start = mp_hal_ticks_ms();
+
+            #if PHYSEC_DEBUG >= 3
                 printf(">>> PROBE SENT\n");
                 hexdump((uint8_t*)probe, sizeof(PHYSEC_Probe));
                 printf("probe->cnt=%d, cnt=%d\n", probe->cnt, cnt);
@@ -3592,9 +4085,11 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             // wait probe response, verify and increment
             int8_t rssi = 0;
             uint32_t wtime = 0;
-            if ( wait_probe(sync->dev_id, &rssi, &wtime, PHYSEC_PROBE_TIMEOUT) == cnt && wtime < PHYSEC_PROBE_TIMEOUT)
+            if ( wait_probe(sync->dev_id, &rssi, &wtime, lora_obj.physec_timeout) == cnt && wtime < lora_obj.physec_timeout)
             {
-            #if PHYSEC_DEBUG
+                last_delay = (mp_hal_ticks_ms()-probe_start) - toa(lora_obj.sf);
+                delay_sum += last_delay;
+            #if PHYSEC_DEBUG >= 3
                 printf("<<< PROBE ANSWER RECEIVED\n");
                 printf("\n");
             #endif
@@ -3602,16 +4097,26 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
                 rssis[cnt] = rssi;
                 cnt++;
-                mp_hal_delay_ms(50);
+
+                //mp_hal_delay_ms(PHYSEC_COHERENCE_TIME);
             }
+            else if (cnt > 0)
+                delay_sum -= last_delay;
         }
+        m.rssi_msrmts_delay = ((float) delay_sum / (float) (cnt)) / lora_obj.physec_timeout;
+        if (kgs)
+        {
+            kgs->measure += (float)(mp_hal_ticks_ms() - cur_stage_start) / 1000.0;
+            kgs->avg_delay = (uint32_t) ((float) delay_sum / (float) (cnt));
+        }
+        
 
         m.nb_msrmts = cnt - last_cnt_before_m_init;
         last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
         last_cnt_before_m_init = cnt - last_incomplete_window_size;
 
-        #ifdef PHYSEC_DEBUG
-            display_rssi(rssis, cnt);
+        #if PHYSEC_DEBUG >= 2
+            memcpy(raw_rssis, rssis, cnt * sizeof(int8_t));
         #endif
 
         { // quantification
@@ -3623,18 +4128,19 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             rssi_msrmts.rssi_msrmts = msrmts;
             memcpy(rssi_msrmts.rssi_msrmts, m.rssi_msrmts, rssi_msrmts.nb_msrmts*sizeof(int8_t));
 
-            nbits = PHYSEC_quntification(&rssi_msrmts, 0.1, P.key);
+            nbits = PHYSEC_quntification(&rssi_msrmts, 0.1, P.key, kgs);
             key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
 
-
-            PHYSEC_RssiMsrmts rssi_msrmts2 = {
-                .nb_msrmts = cnt,
-                .rssi_msrmts_delay = 0,
-                .rssi_msrmts = calloc(sizeof(int8_t), cnt)
-            };
+            int8_t *msrmts2 = malloc(cnt * sizeof(int8_t));
+            PHYSEC_RssiMsrmts rssi_msrmts2 = { 0 };
+            rssi_msrmts2.nb_msrmts = cnt;
+            rssi_msrmts2.rssi_msrmts_delay = 0;
+            rssi_msrmts2.rssi_msrmts = msrmts2;
             PHYSEC_Key P2 = { 0 };
-            memcpy(rssi_msrmts2.rssi_msrmts, rssis, cnt*sizeof(int8_t));
-            int nbits2 = PHYSEC_quntification(&rssi_msrmts2, 0.1, P2.key);
+
+             memcpy(rssi_msrmts2.rssi_msrmts, rssis, cnt*sizeof(int8_t));
+            int nbits2 = PHYSEC_quntification(&rssi_msrmts2, 0.1, P2.key, NULL);
+#if PHYSEC_DEBUG >= 3
             printf("%d - %d - %d\n", nbits, key_len, nbits2);
             if (memcmp(&P2, &key, sizeof(PHYSEC_Key)) != 0)
             {
@@ -3642,7 +4148,8 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 display_key_bits(&P2);
                 display_key_bits(&key);
             }
-            free(rssi_msrmts2.rssi_msrmts);
+#endif
+            free(msrmts2);
         }
 
 
@@ -3656,24 +4163,30 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 last_incomplete_window_size*sizeof(int8_t)
             );
             memcpy(m.rssi_msrmts, the_last_incomplete_window, last_incomplete_window_size*sizeof(int8_t));
-        }
+        }   
 
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
         if (key_len < PHYSEC_KEY_SIZE)
         {
+#if PHYSEC_DEBUG >= 3
             printf("generated bits %d/128 with %d measures\n", key_len, cnt);
+#endif
             n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
             continue;
         }
 
-        #if PHYSEC_DEBUG
+        #if PHYSEC_DEBUG >= 1
             printf("### QUANTIFICATION DONE\n");
+        #if PHYSEC_DEBUG >= 3
             printf("key_len = %d\n", key_len);
             hexdump((uint8_t*) key.key, PHYSEC_KEY_SIZE_BYTES);
             display_key_bits(&key);
+        #endif
             printf("\n");
         #endif
 
+        if (kgs)
+            cur_stage_start = mp_hal_ticks_ms();
         // send reconciliation begin packet
         PHYSEC_Packet pkt = {
             .identifier = PHYSEC_KG_PKT_IDENTIFIER,
@@ -3685,24 +4198,36 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
         memcpy(kg_s->dev_id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
 
         lora_send((uint8_t*) &pkt, sizeof(pkt), -1);
-        #if PHYSEC_DEBUG
+        #if PHYSEC_DEBUG >= 2
             printf(">>> KGS START PKT SENT\n");
+            if ( rssi_diff_infos(sync, raw_rssis, cnt) )
+            {
+                rssi_diff_infos(sync, rssis, cnt);
+            }
+            printf("\n");
+        #if PHYSEC_DEBUG >= 3
+            hexdump((uint8_t*) pkt.payload, sizeof(PHYSEC_KeyGen));
+        #endif
             printf("\n");
         #endif
 
         // wait for KEYGEN packet
-        uint8_t buf[PHYSEC_KEYGEN_PAYLOAD_SIZE] = { 0 };
+        uint8_t buf[PHYSEC_MAX_PAYLOAD_SIZE] = { 0 };
         PHYSEC_PacketType pkt_type = PHYSEC_PT_NONE;
-        while ( ((pkt_type = wait_physec_kg_packet(buf, sizeof(buf), 5000, NULL, NULL)) & (PHYSEC_PT_KEYGEN|PHYSEC_PT_RESET)) == 0 );
+        uint32_t kgstart = mp_hal_ticks_ms();
+        uint32_t kgtime = 5000;
+        while ( ((pkt_type = wait_physec_kg_packet(buf, sizeof(buf), kgtime, NULL, NULL)) & (PHYSEC_PT_KEYGEN|PHYSEC_PT_RESET)) == 0 && (kgtime > (mp_hal_ticks_ms()-kgstart)) );
 
         if (pkt_type == PHYSEC_PT_KEYGEN)
         {
             PHYSEC_KeyGen *kg_r = (PHYSEC_KeyGen*) buf;
 
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 2
             printf("<<< KEYGEN PKT RECEIVED - RECONCILIATION\n");
+#if PHYSEC_DEBUG >= 3
             //printf("VS vec:\n");
-            //hexdump(kg_r->cs_vec, PHYSEC_CS_COMPRESSED_SIZE);
+            hexdump((uint8_t*) kg_r, sizeof(PHYSEC_KeyGen));
+#endif
             printf("\n");
 #endif
 
@@ -3716,35 +4241,61 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
             //PHYSEC_reconciliate((const int8_t*)diff, &P);     // reconciliated key
 
-            PHYSEC_reconciliate_keys_with_debug(&(kg_r->K), &key);
+            PHYSEC_reconciliate_keys_with_debug(&(kg_r->K), &key, &(kgs->mismatch));
 
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 2
             printf("Entropy before PA: %f\n", entropy(key.key, key_len));
 #endif
+            if (kgs)
+                kgs->entropy_pk = entropy(key.key, key_len);
+
 
             if ( !verify_CS_MAC(&key, kg_r) )
                 continue;
-
+            if (kgs)
+            {
+                kgs->reconciliation = (float) (mp_hal_ticks_ms()-cur_stage_start) / 1000.0;
+                cur_stage_start = mp_hal_ticks_ms();
+            }
             PHYSEC_privacy_amplification(&key);
+            if (kgs)
+            {
+                kgs->privacy_amp = (float) (mp_hal_ticks_ms()-cur_stage_start) / 1000.0;
+                kgs->entropy_k = entropy(key.key, key_len);
+            }
 
             memcpy(k, &key, sizeof(PHYSEC_Key));
 
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 1
             printf("### KEY GENERATED\n");
+#if PHYSEC_DEBUG >= 3
             hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
+#endif
+#if PHYSEC_DEBUG >= 2
             printf("Entropy after PA: %f\n", entropy(key.key, key_len));
+            free(raw_rssis);
+#endif
             printf("\n");
 #endif
+            if (kgs)
+            {
+                kgs->n_measures = cnt;
+                kgs->entropy_k = entropy(k->key, PHYSEC_KEY_SIZE_BYTES);
+                kgs->total = kgs->measure + kgs->signal_process + kgs->quantization + kgs->reconciliation + kgs->privacy_amp;
+            }
 
             generated = true;
+            free(rssis);
         }
         // quantification failed to gen 128 bits on the other side, thus reset
         else if (pkt_type == PHYSEC_PT_RESET)
         {
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 2
             printf("<<< KEYGEN PKT RECEIVED - MEASURE RESET\n");
             printf("\n");
 #endif
+            if (kgs)
+                kgs->n_retries++;
             if (memcmp(buf, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0)
             {
                 cnt = 0;
@@ -3752,12 +4303,14 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 memset(&key, 0, sizeof(PHYSEC_Key));
                 key_len = 0;
                 n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
+
             }
         }
     }
-
+    free(m.rssi_msrmts);
 }
 
+#define TEST_WDT_TIMER_MS              10*(60*1000)    // 10 minutes
 /**
  * \brief   listen for incomming packet related to PHYSEC key generation, and respond to them in order to generate
  *          a common private key
@@ -3766,7 +4319,7 @@ initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
  * \param sync  a pointer to a synchronisation struct, used to identify packets related to the current key generation process
  */
 static void
-wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
+wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *kgs)
 {
     bool generated = false;
 
@@ -3781,18 +4334,34 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
     uint16_t last_cnt = 255;
     uint16_t cnt = 0;
     PHYSEC_Key P = { .key = { 0 } };
+    bool on_reset = false;
+    uint32_t cur_stage_start;
+    if (kgs)
+        memset(kgs, 0, sizeof(PHYSEC_KeyGenStats));
 
+    uint32_t wdt_start = mp_hal_ticks_ms();
     while ( !generated )
     {
+
+        
+        if (mp_hal_ticks_ms()-wdt_start > TEST_WDT_TIMER_MS) 
+        {
+            printf("Too much time for PHYSEC KEYGEN ! ABORT...\n\n\n");
+            free(m.rssi_msrmts);
+            return;
+            //machine_wdt_start(1);
+            //while( 1 );     // reset waiting loop 
+        }
+        
         uint8_t buf[PHYSEC_MAX_PAYLOAD_SIZE] = { 0 };
         uint32_t start = 0;
         int8_t rssi = 0;
-        switch ( wait_physec_kg_packet(buf, sizeof(buf), -1, &start, &rssi) )
+        switch ( wait_physec_kg_packet(buf, sizeof(buf), lora_obj.physec_timeout, &start, &rssi) )
         {
             case PHYSEC_PT_PROBE:
             {
                 PHYSEC_Probe *probe = (PHYSEC_Probe*) buf;
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 3
                 printf("<<< PROBE REQUEST RECEIVED\n");
                 hexdump((uint8_t*) probe, sizeof(PHYSEC_Probe));
                 printf("probe->cnt=%d, cnt=%d\n", probe->cnt, cnt);
@@ -3802,6 +4371,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 // verify probe
                 if (memcmp(probe->id, sync->dev_id, PHYSEC_DEV_ID_LEN) == 0)
                 {
+                    if (kgs && cnt == 0)
+                        cur_stage_start = mp_hal_ticks_ms();
+
                     if (probe->cnt == last_cnt)
                     {
                         sum_delay -= last_delay;
@@ -3822,8 +4394,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                         response->cnt = cnt;
                         memcpy(response->id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                         lora_send((uint8_t*) &pkt, sizeof(pkt), 0);
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 3
                         printf(">>> PROBE ANS SENT\n");
+                        hexdump((uint8_t*)pkt.payload, sizeof(PHYSEC_Probe));
                         printf("\n");
 #endif
 
@@ -3833,6 +4406,9 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
                         last_cnt = cnt;
                         cnt ++;
+
+                        if (on_reset)
+                            on_reset = false;
                     }
                 }
                 break;
@@ -3840,8 +4416,11 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
             case PHYSEC_PT_KEYGEN:
             {
 
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 2
                 printf("<<< KEYGEN PKT RECEIVED\n");
+#if PHYSEC_DEBUG >= 3
+                hexdump((uint8_t*)buf, sizeof(PHYSEC_KeyGen));
+#endif
                 printf("\n");
 #endif
                 if (cnt < PHYSEC_N_REQUIRED_MEASURE)
@@ -3853,12 +4432,19 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 if (memcmp(kg_r->dev_id, sync->dev_id, PHYSEC_DEV_ID_LEN) != 0)
                     continue;
 
-                memset(&P, 0, sizeof(PHYSEC_Key));
-
-                m.rssi_msrmts_delay = (sum_delay / cnt) / (PHYSEC_PROBE_TIMEOUT + toa(lora_obj.sf));
+                //m.rssi_msrmts_delay = ((float)sum_delay / (float)cnt) / (lora_obj.physec_timeout);
+                m.rssi_msrmts_delay = 0;
                 m.nb_msrmts = cnt;
 
+                if (kgs)
+                {
+                    kgs->measure = (float) (mp_hal_ticks_ms()-cur_stage_start) / 1000.0;
+                    kgs->avg_delay = (uint32_t)((float) m.rssi_msrmts_delay * (float)lora_obj.physec_timeout);
+                }
+
+                memset(&P, 0, sizeof(PHYSEC_Key));
                 // generate key
+
                 PHYSEC_Packet pkt = {
                     .identifier = PHYSEC_KG_PKT_IDENTIFIER,
                     .type = PHYSEC_PT_KEYGEN,
@@ -3866,21 +4452,35 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
                 };
                 PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
                 int32_t nbits;
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 2
+                bool b_rssi = send_rssis_2(sync, m.rssi_msrmts, m.nb_msrmts, 7000);
+#if PHYSEC_DEBUG >= 3
                 printf("### RSSI BEFORE QUANTIFICATION\n");
                 display_rssi(m.rssi_msrmts, cnt);
 #endif
+#endif
                 memcpy(&(kg_s->dev_id), sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                 // if we did not get enough bits, we reset measurements
-                if ((nbits = PHYSEC_quntification(&m, 0.1, P.key)) >= PHYSEC_KEY_SIZE)
+
+                if ((nbits = PHYSEC_quntification(&m, 0.1, P.key, kgs)) >= PHYSEC_KEY_SIZE)
                 {
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 2
+                    send_rssis_2(sync, m.rssi_msrmts, m.nb_msrmts, 5000);
+#if PHYSEC_DEBUG >= 3
                     printf("### RSSI AFTER QUANTIFICATION\n");
-                    display_rssi(m.rssi_msrmts, cnt);
+                    display_rssi(m.rssi_msrmts, m.nb_msrmts);
+#endif
+#endif
+
+#if PHYSEC_DEBUG >= 1
                     printf("### QUANTIFICATION DONE\n");
-                    printf("nbits = %d\n", nbits);
-                    hexdump((uint8_t*) P.key, PHYSEC_KEY_SIZE_BYTES);
+#if PHYSEC_DEBUG >= 3
+                    hexdump((uint8_t*) &P, PHYSEC_KEY_SIZE_BYTES);
                     display_key_bits(&P);
+#endif
+#if PHYSEC_DEBUG >=2
+                    printf("Key entropy before PA: %f\n", entropy(P.key, PHYSEC_KEY_SIZE));
+#endif
                     printf("\n");
 #endif
                     //PHYSEC_craft_reconciliate_vector(kg_s->cs_vec, (const PHYSEC_Key*) &P);
@@ -3889,57 +4489,132 @@ wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync)
 
                     compute_CS_MAC(&P, kg_s);
 
+                    if (kgs)
+                    {
+                        cur_stage_start = mp_hal_ticks_ms();
+                        kgs->entropy_pk = entropy(P.key, PHYSEC_KEY_SIZE_BYTES);
+                    }
                     PHYSEC_privacy_amplification(&P);
+                    if (kgs)
+                    {
+                        kgs->privacy_amp = (float) (mp_hal_ticks_ms()-cur_stage_start) / 1000.0;
+                        kgs->entropy_k = entropy(P.key, PHYSEC_KEY_SIZE_BYTES);
+                    }
 
                     memcpy(k, &P, sizeof(PHYSEC_Key));
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 1
                     printf("### KEY GENERATED\n");
+#if PHYSEC_DEBUG >= 3
                     hexdump((uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
-                    printf("Key entropy after PA: %f\n", entropy(P.key, PHYSEC_KEY_SIZE));
+                    display_key_bits(k);
+#endif
+#if PHYSEC_DEBUG >= 2
+                    printf("Key entropy after PA: %f\n", entropy(k->key, PHYSEC_KEY_SIZE));
+#endif
                     printf("\n");
 #endif
+
+                    if (kgs)
+                    {
+                        kgs->n_measures = cnt;
+                        kgs->entropy_k = entropy(P.key, PHYSEC_KEY_SIZE_BYTES);
+                        kgs->total = kgs->measure + kgs->signal_process + kgs->quantization + kgs->reconciliation + kgs->privacy_amp;
+                    }
+
                     generated = true;
                 }
                 else
                 {
-#if PHYSEC_DEBUG
-                    printf("### QUANTIFICATION FAILED\n");
+#if PHYSEC_DEBUG >= 1
+                    printf("### QUANTIFICATION FAILED - RESET\n");
+#if PHYSEC_DEBUG >= 2
+                    send_rssis_2(sync, m.rssi_msrmts, m.nb_msrmts, 5000);
+#if PHYSEC_DEBUG >= 3
+                    hexdump((uint8_t*) &P, PHYSEC_KEY_SIZE_BYTES);
                     printf("nbits = %d\n", nbits);
-                    hexdump((uint8_t*) P.key, PHYSEC_KEY_SIZE_BYTES);
+#endif
+#endif
                     printf("\n");
 #endif
                     cnt = 0;
                     sum_delay = 0;
                     pkt.type = PHYSEC_PT_RESET;
+                    on_reset = true;
+
+                    if (kgs)
+                        kgs->n_retries++;
 
                 }
                 lora_send((uint8_t*)&pkt, sizeof(pkt), -1);
-#if PHYSEC_DEBUG
+#if PHYSEC_DEBUG >= 2
                 printf(">>> KGS PKT SENT\n");
                 printf("\n");
 #endif
-
+                continue;
+            }
+            case PHYSEC_PT_RESET:
+            {
+#if PHYSEC_DEBUG >= 2
+                printf("<<< RESET PKT RECEIVED\n");
+                printf("\n");
+#endif
+                cnt = 0;
+                sum_delay = 0;
+                break;
             }
             default:
                 break;
         }
+
+        if (on_reset)
+        {
+            PHYSEC_Packet pkt = {
+                .identifier = PHYSEC_KG_PKT_IDENTIFIER,
+                .type = PHYSEC_PT_RESET,
+                .payload = { 0 }
+            };
+
+            memcpy(pkt.payload, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+
+            lora_send((const uint8_t*) &pkt, sizeof(pkt), -1);
+        }
+
     }
+    free(m.rssi_msrmts);
 }
 
 
 static PHYSEC_Key*
 key_agg(PHYSEC_Sync *sync, bool initiator)
 {
-#if PHYSEC_DEBUG
+    PHYSEC_KeyGenStats *kgs = NULL;
+#if PHYSEC_DEBUG >= 1
     assert (sizeof(sync->rmt_dev_id) >= 4);
     printf("Starting Keygen with 0x%4x\n", *(uint32_t*) sync->rmt_dev_id);
+    PHYSEC_KeyGenStats stats = { 0 };
+    kgs = &stats;
 #endif
     PHYSEC_Key *k = malloc(sizeof(PHYSEC_Key));
     if (initiator)
-        initiate_key_agg(k, sync);
+        initiate_key_agg(k, sync, kgs);
     else
-        wait_key_agg(k, sync);
-
+        wait_key_agg(k, sync, kgs);
+#if PHYSEC_DEBUG >= 1
+    printf("\n### KEY GENERATION STATISTICS\n\n");
+    printf("[+] Total KeyGen duration  : %f s\n", kgs->total );
+    printf("[+] Measure duration : %f s\n", kgs->measure );
+    printf("[+] Signal Processing duration : %f s\n", kgs->signal_process );
+    printf("[+] Quantization duration : %f s\n", kgs->quantization );
+    printf("[+] Reconciliation duration : %f s\n", kgs->reconciliation );
+    printf("[+] Privacy Amplification duration : %f s\n", kgs->privacy_amp );
+    printf("[+] Mismatch : %f\n", kgs->mismatch);
+    printf("[+] NB measures : %d\n", kgs->n_measures );
+    printf("[+] NB reset : %d\n", kgs->n_retries );
+    printf("[+] Average measure delay : %d ms\n", kgs->avg_delay);
+    printf("[+] Key entropy before Privacy amplification : %f\n", kgs->entropy_pk);
+    printf("[+] Key entropy after Privacy amplification : %f\n", kgs->entropy_k);
+    printf("\n");
+#endif
     return k;
 }
 
@@ -4454,10 +5129,12 @@ static int lora_socket_recv (mod_network_socket_obj_t *s, byte *buf, mp_uint_t l
             // register key
             peer_key_push(&(lora_obj.peer_key_list), lora_obj.physec_remote_device_id, (const uint8_t*) newkey->key);
 
+            // decrypt msg
+            int ret = PHYSEC_recv(newkey, buf, len, s->sock_base.timeout);
+            
             free(newkey);
 
-            // encrypt msg
-            return PHYSEC_recv(newkey, buf, len, s->sock_base.timeout);
+            return ret;
         }
     }
     else
@@ -4595,3 +5272,4 @@ static int lora_socket_sendto(struct _mod_network_socket_obj_t *s, const byte *b
     *_errno = MP_EOPNOTSUPP;
     return -1;
 }
+ 

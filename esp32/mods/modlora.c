@@ -267,12 +267,6 @@ typedef struct _PHYSEC_Key {
 } PHYSEC_Key;
 
 // -- Measurements structures
-// Old rssi measurement
-typedef struct _PHYSEC_RssiMsrmts {
-    uint16_t nb_msrmts;
-    int8_t *rssi_msrmts;
-    float rssi_msrmts_delay;
-} PHYSEC_RssiMsrmts;
 
 // Measurement used for KeyGen
 typedef enum _PHYSEC_MeasureType {
@@ -3600,57 +3594,57 @@ PHYSEC_verify_CS_MAC(const PHYSEC_Key *K, const PHYSEC_KeyGen *kg)
 // -- Filtering
 
 static
-void PHYSEC_golay_filter(PHYSEC_RssiMsrmts *rssi_msermts){
+void PHYSEC_golay_filter(PHYSEC_Measures *rssi_msermts){
 
     int8_t coef[] = {-3, 12, 17, 12, -3};
     float normalization;
 
     int rssi_tmp; // it is not normalisze so int8_t is not a valid type.
 
-    int8_t filtred_rssi_msrmts[rssi_msermts->nb_msrmts];
+    int8_t filtred_values[rssi_msermts->nb_val];
 
-    for(int i_rssi = 0; i_rssi < rssi_msermts->nb_msrmts; i_rssi++){
+    for(int i_rssi = 0; i_rssi < rssi_msermts->nb_val; i_rssi++){
 
         normalization = 0;
         rssi_tmp = 0;
 
         for(int i_coef = -2; i_coef < 3; i_coef++){
-            if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts->nb_msrmts){
-                rssi_tmp += coef[i_coef+2] * rssi_msermts->rssi_msrmts[i_rssi+i_coef];
+            if(i_rssi+i_coef >= 0 && i_rssi+i_coef < rssi_msermts->nb_val){
+                rssi_tmp += coef[i_coef+2] * rssi_msermts->values[i_rssi+i_coef];
                 normalization += coef[i_coef+2];
             }
         }
 
-        filtred_rssi_msrmts[i_rssi] = (int8_t) ((float)(rssi_tmp)/normalization);
+        filtred_values[i_rssi] = (int8_t) ((float)(rssi_tmp)/normalization);
 
     }
 
-    memcpy(rssi_msermts->rssi_msrmts, filtred_rssi_msrmts, rssi_msermts->nb_msrmts * sizeof(int8_t));
+    memcpy(rssi_msermts->values, filtred_values, rssi_msermts->nb_val * sizeof(int8_t));
 
 }
 
 // --- Interpolation
 
 static
-void  PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
+void  PHYSEC_interpolation(PHYSEC_Measures *rssi_msermts){
 
-    int8_t interpolated_rssi_msrmts[rssi_msermts->nb_msrmts];
+    int8_t interpolated_values[rssi_msermts->nb_val];
 
     int8_t delta_rssi;
     float rssi_err;
 
-    if(rssi_msermts->nb_msrmts > 0 && rssi_msermts->rssi_msrmts_delay > 0.0){
+    if(rssi_msermts->nb_val > 0 && rssi_msermts->delay > 0.0){
 
-        interpolated_rssi_msrmts[0] = rssi_msermts->rssi_msrmts[0];
+        interpolated_values[0] = rssi_msermts->values[0];
 
-        for(int i = 1; i < rssi_msermts->nb_msrmts; i++){
-            delta_rssi = rssi_msermts->rssi_msrmts[i] - rssi_msermts->rssi_msrmts[i-1];
-            rssi_err = (rssi_msermts->rssi_msrmts_delay * (float)(delta_rssi));
-            interpolated_rssi_msrmts[i] = rssi_msermts->rssi_msrmts[i] - rssi_err;
+        for(int i = 1; i < rssi_msermts->nb_val; i++){
+            delta_rssi = rssi_msermts->values[i] - rssi_msermts->values[i-1];
+            rssi_err = (rssi_msermts->delay * (float)(delta_rssi));
+            interpolated_values[i] = rssi_msermts->values[i] - rssi_err;
         }
 
-        rssi_msermts->rssi_msrmts_delay = 0;
-        memcpy(rssi_msermts->rssi_msrmts, interpolated_rssi_msrmts, rssi_msermts->nb_msrmts*sizeof(int8_t));
+        rssi_msermts->delay = 0;
+        memcpy(rssi_msermts->values, interpolated_values, rssi_msermts->nb_val*sizeof(int8_t));
 
     }
 
@@ -3658,7 +3652,7 @@ void  PHYSEC_interpolation(PHYSEC_RssiMsrmts *rssi_msermts){
 
 // Key generation
 
-// -- Quntification
+// -- Quantization
 
 #define PHYSEC_QUNTIFICATION_WINDOW_LEN 10
 
@@ -3810,13 +3804,13 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
         0 : in case of error
 */
 static
-unsigned char PHYSEC_quntification_get_level(
+uint8_t PHYSEC_quntification_get_level(
     int8_t rssi,
     int8_t *threshold_starts,
     int8_t *threshold_ends,
     int8_t qunatification_level_nbr
 ){
-    unsigned char level = 1;
+    uint8_t level = 1;
     for(int i = 0; i<qunatification_level_nbr; i++){
         if(rssi<threshold_starts[i])
             return 0;
@@ -3834,7 +3828,7 @@ unsigned char PHYSEC_quntification_get_level(
 */
 static
 int PHYSEC_quntification(
-    PHYSEC_RssiMsrmts *rssi_msermts,
+    PHYSEC_Measures *rssi_msermts,
     double data_to_band_ration,
     uint8_t *key_output,
     PHYSEC_KeyGenStats *kgs
@@ -3864,14 +3858,14 @@ int PHYSEC_quntification(
         cur_start = mp_hal_ticks_ms();
     // preaparing for key generation
     memset(key_output, 0, 16*sizeof(uint8_t));
-    unsigned char level;
+    uint8_t level;
     int8_t rest_bits;
     uint8_t gen_bits;
 
-    while(rssi_msermts->nb_msrmts - rssi_window_align_index  >= PHYSEC_QUNTIFICATION_WINDOW_LEN){
+    while(rssi_msermts->nb_val - rssi_window_align_index  >= PHYSEC_QUNTIFICATION_WINDOW_LEN){
 
         // rssi window
-        rssi_window = rssi_msermts->rssi_msrmts+rssi_window_align_index;
+        rssi_window = rssi_msermts->values+rssi_window_align_index;
 
         // computing density
         density = PHYSEC_quntification_get_density(rssi_window);
@@ -3936,34 +3930,34 @@ void PHYSEC_signal_processing_test(){
 
     int8_t rssi_tmp[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
 
-    PHYSEC_RssiMsrmts M;
-    M.nb_msrmts = 10;
-    M.rssi_msrmts = rssi_tmp;
-    M.rssi_msrmts_delay = 12;
+    PHYSEC_Measures M;
+    M.nb_val = 10;
+    M.values = rssi_tmp;
+    M.delay = 12;
 
     printf("rssi original :");
-    for(int i = 0; i < M.nb_msrmts; i++){
-        printf(" %d", M.rssi_msrmts[i]);
+    for(int i = 0; i < M.nb_val; i++){
+        printf(" %d", M.values[i]);
 
     }
     printf("\n");
 
     PHYSEC_golay_filter(&M);
     printf("rssi filtered :");
-    for(int i = 0; i < M.nb_msrmts; i++){
-        printf(" %d", M.rssi_msrmts[i]);
+    for(int i = 0; i < M.nb_val; i++){
+        printf(" %d", M.values[i]);
     }
     printf("\n");
 
     PHYSEC_interpolation(&M);
     printf("rssi estimated :");
-    for(int i = 0; i < M.nb_msrmts; i++){
-        printf(" %d", M.rssi_msrmts[i]);
+    for(int i = 0; i < M.nb_val; i++){
+        printf(" %d", M.values[i]);
     }
     printf("\n");
 
     printf("density estimation :\n");
-    struct density density = PHYSEC_quntification_get_density(M.rssi_msrmts);
+    struct density density = PHYSEC_quntification_get_density(M.values);
     printf("\tq_0 : %d\n", density.q_0);
     printf("\tbin_nbr : %d\n", density.bin_nbr);
     printf("\tbins = [");
@@ -3983,10 +3977,10 @@ void PHYSEC_signal_processing_test(){
     // quantification test
     int8_t rssi_tmp2[] = {81, 66, 50, 40, 84, 92, 79, 95, 102, 86, 96, 47, 58, 74, 87, 92, 66, 84, 53, 61, 72, 83, 81, 64, 55, 47, 85, 95, 77, 98, 102, 85, 97, 45, 57, 78, 85, 93, 47, 58, 74, 87, 92, 66, 84, 53, 64, 85, 52, 64, 76, 88, 81, 66, 50, 40, 84, 92, 79, 95, 102, 86};
 
-    PHYSEC_RssiMsrmts M2;
-    M2.nb_msrmts = 62;
-    M2.rssi_msrmts = rssi_tmp2;
-    M2.rssi_msrmts_delay = 12;
+    PHYSEC_Measures M2;
+    M2.nb_val = 62;
+    M2.values = rssi_tmp2;
+    M2.delay = 12;
 
     uint8_t generated_key[16];
     int generated_key_len = PHYSEC_quntification(&M2, 0.1, generated_key, NULL);
@@ -4004,6 +3998,9 @@ void PHYSEC_signal_processing_test(){
 }
 
 #endif
+
+// --- END : Quantization
+
 // END : Key generation
 
 // Reconciliation
@@ -4015,32 +4012,33 @@ void PHYSEC_signal_processing_test(){
 typedef struct _matrix {
     uint8_t nrows;
     uint8_t ncols;
-    uint8_t **content; // A row is a ncols array
+    int **content; // A row is a ncols array
 } matrix;
 
-void matrix_extract_row(const matrix *A, int index, uint8_t *vec_out){
-    memcpy(vec_out, A->content[index], A->ncols * sizeof(uint8_t));
-}
+// void matrix_extract_row(const matrix *A, int index, int *vec_out){
+//     // memcpy(vec_out, A->content[index], A->ncols * sizeof(int));
+// }
 
-void matrix_extract_col(const matrix *A, int index, uint8_t *vec_out){
+void matrix_extract_col(const matrix *A, int index, int *vec_out){
     for(int i = 0; i < A->nrows; i++){
         vec_out[i] = A->content[i][index];
     }
 }
 
-void vec_sum(const uint8_t *vec1, const uint8_t *vec2, uint8_t *vec_out, uint8_t size){
+void vec_sum(const int *vec1, const int *vec2, int *vec_out, unsigned char size){
     for(int i = 0; i < size; i++){
         vec_out[i] = vec1[i] + vec2[i];
     }
 }
 
-void vec_diff(const uint8_t *vec1, const uint8_t *vec2, uint8_t *vec_out, uint8_t size){
+void vec_diff(const int *vec1, const int *vec2, int *vec_out, unsigned char size){
     for(int i = 0; i < size; i++){
         vec_out[i] = vec1[i] - vec2[i];
     }
 }
 
-double vec_norm2(const uint8_t *vec, uint8_t size){
+double vec_norm2(const int *vec, unsigned char size){
+
     double norm = 0;
     for(int i = 0; i < size; i++){
         norm += (double) (vec[i] * vec[i]);
@@ -4048,26 +4046,38 @@ double vec_norm2(const uint8_t *vec, uint8_t size){
     return sqrt(norm);
 }
 
-uint8_t vec_dot_product(const uint8_t *vec1, const uint8_t *vec2, uint8_t size){
-
-    uint8_t res = 0;
-
+int vec_dot_product(const int *vec1, const int *vec2, unsigned char size){
+    
+    int res = 0;
+    
     for(int i = 0; i < size; i++){
-        res += vec1[i]*vec2[i];
+        res += (vec1[i]*vec2[i]);
     }
 
     return res;
 }
 
-static void vec_key2vec(const PHYSEC_Key *k, uint8_t *vec_out){
-    for (int i=0; i<PHYSEC_KEY_SIZE; i++)
-    {
-        vec_out[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
+static void vec_key2vec(const PHYSEC_Key *k, int *vec_out){
+    
+    int byte_index = -1;
+    int in_byte_index = 0;
+    
+    for (int i=0; i<PHYSEC_KEY_SIZE; i++){
+        
+        // vec_out[i] = (k->key[i/8] >> (7-(i%8))) & 0x1;
+
+        if(i%8 == 0){
+            byte_index++;
+            in_byte_index = 0;
+        }
+        
+        vec_out[i] = (k->key[byte_index] >> (7-in_byte_index)) & 0x1;
+        in_byte_index++;
     }
 }
 
-static void vec_vec2key(uint8_t *vec, PHYSEC_Key *k_out){
-
+static void vec_vec2key(int *vec, PHYSEC_Key *k_out){
+    
     int byte_index = -1;
     int in_byte_index;
 
@@ -4078,7 +4088,9 @@ static void vec_vec2key(uint8_t *vec, PHYSEC_Key *k_out){
             byte_index++;
             in_byte_index = 0;
         }
-        k_out->key[byte_index] +=  vec[i] << (7-in_byte_index);
+
+        k_out->key[byte_index] +=  ((vec[i] << (7-in_byte_index)) & (0x1) << (7-in_byte_index));
+        in_byte_index++;
     }
 
 }
@@ -4086,19 +4098,18 @@ static void vec_vec2key(uint8_t *vec, PHYSEC_Key *k_out){
 // defining compression matrix
 matrix compression_matrix_def(){
 
-    uint8_t A_1D_content[] = A_1D_CONTENT;
+    int A_1D_content[] = A_1D_CONTENT;
 
     matrix A;
     A.nrows = PHYSEC_CS_COMPRESSED_SIZE;
     A.ncols = PHYSEC_KEY_SIZE;
-    A.content = malloc(PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t*));
-
+    A.content = malloc(PHYSEC_CS_COMPRESSED_SIZE * sizeof(int*));
+    
     for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++){
 
-        A.content[i] = malloc(sizeof(uint8_t) * A.ncols);
+        A.content[i] = malloc(sizeof(int) * A.ncols);
 
         for(int j = 0; j < PHYSEC_KEY_SIZE; j++){
-            printf("%d : %d\n", i, A_1D_content[i*PHYSEC_KEY_SIZE+j]);
             A.content[i][j] = A_1D_content[i*PHYSEC_KEY_SIZE+j];
         }
     }
@@ -4106,25 +4117,24 @@ matrix compression_matrix_def(){
     return A;
 };
 
-void compression_matrix_free(matrix A){
-
+void compression_matrix_free(matrix *A){
+    
     for (int i=0; i<PHYSEC_CS_COMPRESSED_SIZE; i++){
-        free(A.content[i]);
+        free(A->content[i]);
     }
 
-    free(A.content);
+    free(A->content);
 };
 
-
 static void
-mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
+mul_matrix_H(const matrix *A, const int *vec, size_t size, int *ret)
 {
-    memset(ret, 0, sizeof(uint8_t) * A->nrows);
+    memset(ret, 0, sizeof(int) * A->nrows);
     for (int i=0; i < A->nrows; i++)
     {
         for (int j=0; j < A->ncols; j++)
         {
-            ret[i] += A->content[i][j] * vec[i];
+            ret[i] += A->content[i][j] * vec[j];
         }
     }
 }
@@ -4133,7 +4143,7 @@ mul_matrix_H(const matrix *A, const uint8_t *vec, size_t size, uint8_t *ret)
 
 struct atom{
     int index;
-    uint8_t atom[PHYSEC_CS_COMPRESSED_SIZE];
+    int atom[PHYSEC_CS_COMPRESSED_SIZE];
 };
 
 struct atom_array{
@@ -4142,8 +4152,10 @@ struct atom_array{
 };
 
 static struct atom_array atom_array_init(const matrix *A){
-
+    
     struct atom_array atoms;
+
+    atoms.not_used_atoms_nbr = PHYSEC_KEY_SIZE;
 
     for(int i = 0; i<PHYSEC_KEY_SIZE; i++){
         atoms.atoms[i].index = i;
@@ -4153,74 +4165,144 @@ static struct atom_array atom_array_init(const matrix *A){
     return atoms;
 }
 
+static int atom_get_in_tab_index_by_atom_index(struct atom_array *atoms, int index){
+    for(int i = 0; i < atoms->not_used_atoms_nbr; i++){
+        if(atoms->atoms[i].index == index){
+            return i;
+        }
+    }
+    fprintf(stderr, "Atom index not found.\n");
+    return -1;
+}
+
 static void atom_array_mark_as_used(struct atom_array *atoms, int index){
+
+    int in_tab_index = atom_get_in_tab_index_by_atom_index(atoms, index);
+
     memcpy(
-        atoms->atoms+index,
+        atoms->atoms+in_tab_index,
         atoms->atoms+(atoms->not_used_atoms_nbr -1),
-        PHYSEC_CS_COMPRESSED_SIZE*sizeof(uint8_t)
+        sizeof(struct atom)
     );
+
     atoms->not_used_atoms_nbr--;
 }
 
-static int atom_array_get_best_matching_atom_index(struct atom_array *atoms, uint8_t *residual){
+static int atom_array_get_best_matching_atom_index(struct atom_array *atoms, int *residual, int *dot_product_sign){
 
+    char max_not_define = 1;
     int max_index = -1;
-    int max = -1;
+    double max = -1.0;
+    *dot_product_sign = 1;
 
-    uint8_t dot_product;
+    double metric, metric_tmp;
+
+    int dot_product_sign_tmp;
+    int tmp_vec[PHYSEC_CS_COMPRESSED_SIZE];
 
     for(int i = 0; i < atoms->not_used_atoms_nbr; i++){
+        
+        // metric : dot product
+        // metric = vec_dot_product(atoms->atoms[i].atom, residual, PHYSEC_CS_COMPRESSED_SIZE);
 
-        dot_product = vec_dot_product(atoms->atoms[i].atom, residual, PHYSEC_CS_COMPRESSED_SIZE);
-        if(dot_product > max){
-            max = dot_product;
-            max_index = i;
+        // metric : norm2
+        vec_diff(residual, atoms->atoms[i].atom, tmp_vec, PHYSEC_CS_COMPRESSED_SIZE);
+        metric = vec_norm2(tmp_vec, PHYSEC_CS_COMPRESSED_SIZE);
+        dot_product_sign_tmp = 1;
+
+        vec_sum(residual, atoms->atoms[i].atom, tmp_vec, PHYSEC_CS_COMPRESSED_SIZE);
+        metric_tmp = vec_norm2(tmp_vec, PHYSEC_CS_COMPRESSED_SIZE);
+        
+        if(metric_tmp > metric){
+            metric = metric_tmp;
+            dot_product_sign_tmp = -1;
         }
-
+        
+        if(max_not_define || metric > max){
+            max_not_define = 0;
+            max = metric;
+            max_index = atoms->atoms[i].index;
+            *dot_product_sign = dot_product_sign_tmp;
+        }
+    
     }
 
     return max_index;
 }
 
 static void
-PHYSEC_craft_reconciliate_vector(uint8_t *cs_vec, const PHYSEC_Key *k, matrix *A)
+PHYSEC_craft_reconciliate_vector(int *cs_vec, const PHYSEC_Key *k, matrix *A)
 {
-    uint8_t k_vec[PHYSEC_KEY_SIZE];
+    int k_vec[PHYSEC_KEY_SIZE];
     vec_key2vec(k, k_vec);
 
     mul_matrix_H(A, k_vec, PHYSEC_KEY_SIZE, cs_vec);
 }
 
-static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, uint8_t *x_out){
+static void PHYSEC_compute_key_error(const matrix *A, const int *y, int *x_out){
 
     // Init key error
-    memset(x_out, 0, PHYSEC_KEY_SIZE*sizeof(uint8_t));
-
-    // Init residual
-    uint8_t residual[PHYSEC_CS_COMPRESSED_SIZE];
-    memcpy(residual, y, PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t));
+    int x_tmp[PHYSEC_KEY_SIZE];
+    memset(x_tmp, 0, PHYSEC_KEY_SIZE*sizeof(int));
 
     // Init atom array
     struct atom_array atoms = atom_array_init(A);
-    int best_matching_atom_index;
+    int best_matching_atom_index, dot_product_sig;
 
-    while(
-        atoms.not_used_atoms_nbr > 0 &&
-        vec_norm2(residual, PHYSEC_CS_COMPRESSED_SIZE) > PHYSEC_RECONCILIATION_EPS
-    ){
+    // Init residual
+    int residual[PHYSEC_CS_COMPRESSED_SIZE];
+    int residual_tmp[PHYSEC_CS_COMPRESSED_SIZE];
+    memcpy(residual, y, PHYSEC_CS_COMPRESSED_SIZE * sizeof(int));
 
-        best_matching_atom_index = atom_array_get_best_matching_atom_index(&atoms, residual);
+    double residual_norm2;
+    double min_residual_norm2 = vec_norm2(residual, PHYSEC_CS_COMPRESSED_SIZE);
+    memcpy(x_out, x_tmp, sizeof(int)*PHYSEC_KEY_SIZE);
 
-        x_out[best_matching_atom_index] = 1;
+    int nbr_of_ignored_max = 0;
 
-        vec_diff(
-            residual,
-            atoms.atoms[best_matching_atom_index].atom,
-            residual,
-            PHYSEC_CS_COMPRESSED_SIZE * sizeof(uint8_t)
-        );
+    
+    while(atoms.not_used_atoms_nbr > 0){
 
+        best_matching_atom_index = atom_array_get_best_matching_atom_index(&atoms, residual, &dot_product_sig);
+
+        x_tmp[best_matching_atom_index] = dot_product_sig;
         atom_array_mark_as_used(&atoms, best_matching_atom_index);
+
+        if(dot_product_sig == -1){
+            vec_diff(
+                residual,
+                atoms.atoms[best_matching_atom_index].atom,
+                residual,
+                PHYSEC_CS_COMPRESSED_SIZE
+            );
+        }else{
+            vec_sum(
+                residual,
+                atoms.atoms[best_matching_atom_index].atom,
+                residual,
+                PHYSEC_CS_COMPRESSED_SIZE
+            );
+        }
+
+        residual_norm2 = vec_norm2(residual, PHYSEC_CS_COMPRESSED_SIZE);
+
+        if(residual_norm2 < min_residual_norm2){
+
+            min_residual_norm2 = residual_norm2;
+            memcpy(x_out, x_tmp, sizeof(int)*PHYSEC_KEY_SIZE);
+
+            if(residual_norm2 == 0){
+                break;
+            }
+        
+        }
+
+        if(residual_norm2 >= min_residual_norm2){
+            nbr_of_ignored_max++;
+            if(nbr_of_ignored_max == 1){
+                break;
+            }
+        }
 
     }
 
@@ -4229,29 +4311,28 @@ static void PHYSEC_compute_key_error(const matrix *A, const uint8_t *y, uint8_t 
 // --- The hight level function
 
 // --- --- For Bob
-static void PHYSEC_reconciliation_compute_compressed_key(const PHYSEC_Key *k, uint8_t *y_out){
-
+static void PHYSEC_reconciliation_compute_compressed_key(const PHYSEC_Key *k, int *y_out){
+    
     matrix A = compression_matrix_def();
 
     PHYSEC_craft_reconciliate_vector(y_out, k, &A);
 
-    compression_matrix_free(A);
+    compression_matrix_free(&A);
 }
 
 // --- --- For Alice
-static void PHYSEC_reconciliate_key(
+static PHYSEC_Key PHYSEC_reconciliate_key(
     const PHYSEC_Key *Alice_key,
-    const uint8_t *Bob_compressed_key,
-    PHYSEC_Key *outkey
+    const int *Bob_compressed_key
 ){
     matrix A = compression_matrix_def();
 
-    uint8_t Alice_key_vec[PHYSEC_KEY_SIZE];
-    uint8_t Alice_compressed_key[PHYSEC_CS_COMPRESSED_SIZE];
-    uint8_t compressed_key_diff[PHYSEC_CS_COMPRESSED_SIZE];
-    uint8_t key_error[PHYSEC_KEY_SIZE];
+    int Alice_key_vec[PHYSEC_KEY_SIZE];
+    int Alice_compressed_key[PHYSEC_CS_COMPRESSED_SIZE];
+    int compressed_key_diff[PHYSEC_CS_COMPRESSED_SIZE];
+    int key_error[PHYSEC_KEY_SIZE];
     PHYSEC_Key reconciliated_key;
-    uint8_t reconciliated_key_vec[PHYSEC_KEY_SIZE];
+    int reconciliated_key_vec[PHYSEC_KEY_SIZE];
 
     PHYSEC_craft_reconciliate_vector(Alice_compressed_key, Alice_key, &A);
     vec_diff(Alice_compressed_key, Bob_compressed_key, compressed_key_diff, PHYSEC_CS_COMPRESSED_SIZE);
@@ -4260,17 +4341,13 @@ static void PHYSEC_reconciliate_key(
     // reconciliation
     vec_key2vec(Alice_key, Alice_key_vec);
     for(int i = 0; i<PHYSEC_KEY_SIZE; i++){
-        if(key_error[i]){
-            reconciliated_key_vec[i] = 1-Alice_key_vec[i];
-        }else{
-            reconciliated_key_vec[i] = Alice_key_vec[i];
-        }
+        reconciliated_key_vec[i] = (Alice_key_vec[i] + key_error[i]) % 2;
     }
     vec_vec2key(reconciliated_key_vec, &reconciliated_key);
 
-    compression_matrix_free(A);
+    compression_matrix_free(&A);
 
-    memcpy(outkey, &reconciliated_key, sizeof(PHYSEC_Key));
+    return reconciliated_key;
 }
 
 // END : Reconciliation
@@ -4335,8 +4412,8 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
     int8_t *raw_rssis = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t));
 #endif
     uint16_t n_required = PHYSEC_N_REQUIRED_MEASURE;
-    PHYSEC_RssiMsrmts m = { 0 };
-    m.rssi_msrmts = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t)); // alloc failure is already caught by micro python
+    PHYSEC_Measures m = { 0 };
+    m.values = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t)); // alloc failure is already caught by micro python
 
 
     // Generation loop
@@ -4383,7 +4460,7 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
                 physec_log(3, "\n");
 
                 // store rssi of last probe
-                m.rssi_msrmts[cnt-last_cnt_before_m_init] = rssi;
+                m.values[cnt-last_cnt_before_m_init] = rssi;
                 rssis[cnt] = rssi;
                 cnt++;
 
@@ -4392,7 +4469,7 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             else if (cnt > 0)
                 delay_sum -= last_delay;
         }
-        m.rssi_msrmts_delay = ((float) delay_sum / (float) (cnt)) / lora_obj.physec_timeout;
+        m.delay = ((float) delay_sum / (float) (cnt)) / lora_obj.physec_timeout;
         if (kgs)
         {
             kgs->measure += (float)(mp_hal_ticks_ms() - cur_stage_start) / 1000.0;
@@ -4400,8 +4477,8 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
         }
 
         // Phase 1,2 : signal processing + quantization
-        m.nb_msrmts = cnt - last_cnt_before_m_init;
-        last_incomplete_window_size = m.nb_msrmts % PHYSEC_QUNTIFICATION_WINDOW_LEN;
+        m.nb_val = cnt - last_cnt_before_m_init;
+        last_incomplete_window_size = m.nb_val % PHYSEC_QUNTIFICATION_WINDOW_LEN;
         last_cnt_before_m_init = cnt - last_incomplete_window_size;
 
         #if PHYSEC_DEBUG == 4
@@ -4411,27 +4488,27 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
         physec_log(1, "### QUANTIFICATION\n\n");
         // need to clear some code in this part
         { // quantification
-            PHYSEC_RssiMsrmts rssi_msrmts;
-            rssi_msrmts.nb_msrmts = m.nb_msrmts-last_incomplete_window_size;
-            rssi_msrmts.rssi_msrmts_delay = m.rssi_msrmts_delay;
+            PHYSEC_Measures values;
+            values.nb_val = m.nb_val-last_incomplete_window_size;
+            values.delay = m.delay;
 
-            int8_t msrmts[rssi_msrmts.nb_msrmts];
-            rssi_msrmts.rssi_msrmts = msrmts;
-            memcpy(rssi_msrmts.rssi_msrmts, m.rssi_msrmts, rssi_msrmts.nb_msrmts*sizeof(int8_t));
+            int8_t msrmts[values.nb_val];
+            values.values = msrmts;
+            memcpy(values.values, m.values, values.nb_val*sizeof(int8_t));
 
-            nbits = PHYSEC_quntification(&rssi_msrmts, 0.1, P.key, kgs);
+            nbits = PHYSEC_quntification(&values, 0.1, P.key, kgs);
             key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
 
             // need to delete from here and also delete related variables
             int8_t *msrmts2 = malloc(cnt * sizeof(int8_t));
-            PHYSEC_RssiMsrmts rssi_msrmts2 = { 0 };
-            rssi_msrmts2.nb_msrmts = cnt;
-            rssi_msrmts2.rssi_msrmts_delay = 0;
-            rssi_msrmts2.rssi_msrmts = msrmts2;
+            PHYSEC_Measures values2 = { 0 };
+            values2.nb_val = cnt;
+            values2.delay = 0;
+            values2.values = msrmts2;
             PHYSEC_Key P2 = { 0 };
 
-             memcpy(rssi_msrmts2.rssi_msrmts, rssis, cnt*sizeof(int8_t));
-            int nbits2 = PHYSEC_quntification(&rssi_msrmts2, 0.1, P2.key, NULL);
+             memcpy(values2.values, rssis, cnt*sizeof(int8_t));
+            int nbits2 = PHYSEC_quntification(&values2, 0.1, P2.key, NULL);
 #if PHYSEC_DEBUG >= 2
             printf("%d - %d - %d\n", nbits, key_len, nbits2);
             if (memcmp(&P2, &key, sizeof(PHYSEC_Key)) != 0)
@@ -4451,10 +4528,10 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             int8_t the_last_incomplete_window[last_incomplete_window_size];
             memcpy(
                 the_last_incomplete_window,
-                m.rssi_msrmts+(m.nb_msrmts-last_incomplete_window_size),
+                m.values+(m.nb_val-last_incomplete_window_size),
                 last_incomplete_window_size*sizeof(int8_t)
             );
-            memcpy(m.rssi_msrmts, the_last_incomplete_window, last_incomplete_window_size*sizeof(int8_t));
+            memcpy(m.values, the_last_incomplete_window, last_incomplete_window_size*sizeof(int8_t));
         }
 
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
@@ -4614,7 +4691,7 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
         }
     }
-    free(m.rssi_msrmts);
+    free(m.values);
 }
 
 #define TEST_WDT_TIMER_MS              10*(60*1000)    // 10 minutes
@@ -4632,10 +4709,10 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
 {
     bool generated = false;
 
-    PHYSEC_RssiMsrmts m = {
-        .nb_msrmts = 0,
-        .rssi_msrmts = malloc(sizeof(int8_t) * PHYSEC_N_MAX_MEASURE), // alloc failure is already caught by micro python
-        .rssi_msrmts_delay = 0
+    PHYSEC_Measures m = {
+        .nb_val = 0,
+        .values = malloc(sizeof(int8_t) * PHYSEC_N_MAX_MEASURE), // alloc failure is already caught by micro python
+        .delay = 0
     };
 
     uint32_t sum_delay = 0;
@@ -4656,7 +4733,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
         if (mp_hal_ticks_ms()-wdt_start > TEST_WDT_TIMER_MS)
         {
             printf("Too much time for PHYSEC KEYGEN ! ABORT...\n\n\n");
-            free(m.rssi_msrmts);
+            free(m.values);
             return;
             //machine_wdt_start(1);
             //while( 1 );     // reset waiting loop
@@ -4689,7 +4766,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 if (probe->cnt == cnt)
                 {
                     // probe accepted, store rssi and respond to probe
-                    m.rssi_msrmts[cnt] = rssi;
+                    m.values[cnt] = rssi;
 
                     PHYSEC_Packet pkt = {
                         .identifier = PHYSEC_KG_PKT_IDENTIFIER,
@@ -4727,14 +4804,14 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 if (cnt < PHYSEC_N_REQUIRED_MEASURE)
                     continue;
 
-                //m.rssi_msrmts_delay = ((float)sum_delay / (float)cnt) / (lora_obj.physec_timeout);
-                m.rssi_msrmts_delay = 0;
-                m.nb_msrmts = cnt;
+                //m.values_delay = ((float)sum_delay / (float)cnt) / (lora_obj.physec_timeout);
+                m.delay = 0;
+                m.nb_val = cnt;
 
                 if (kgs)
                 {
                     kgs->measure = (float) (mp_hal_ticks_ms()-cur_stage_start) / 1000.0;
-                    kgs->avg_delay = (uint32_t)((float) m.rssi_msrmts_delay * (float)lora_obj.physec_timeout);
+                    kgs->avg_delay = (uint32_t)((float) m.delay * (float)lora_obj.physec_timeout);
                 }
 
                 memset(&P, 0, sizeof(PHYSEC_Key));
@@ -4751,11 +4828,11 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 int32_t nbits;
 
 #if PHYSEC_DEBUG == 4
-                bool b_rssi = send_rssis(sync, m.rssi_msrmts, m.nb_msrmts, 7000);
+                bool b_rssi = send_rssis(sync, m.values, m.nb_val, 7000);
 #endif
                 physec_log(2, "### RSSI BEFORE QUANTIFICATION\n");
 #if PHYSEC_DEBUG >= 2
-                display_m_vals(m.rssi_msrmts, cnt);
+                display_m_vals(m.values, cnt);
 #endif
 
                 // if we did not get enough bits, we reset measurements
@@ -4765,11 +4842,11 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 {
 #if PHYSEC_DEBUG == 4
                     if (b_rssi)
-                        send_rssis(sync, m.rssi_msrmts, m.nb_msrmts, 5000);
+                        send_rssis(sync, m.values, m.nb_val, 5000);
 #endif
 
                     physec_log(2, "### RSSI AFTER QUANTIFICATION\n");
-                    physec_verb_statement(2, display_m_vals(m.rssi_msrmts, cnt));
+                    physec_verb_statement(2, display_m_vals(m.values, cnt));
 
                     physec_hexdump(2, (uint8_t*) &P, PHYSEC_KEY_SIZE_BYTES);
                     physec_verb_statement(2, display_key_bits(&P));
@@ -4818,7 +4895,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                     physec_log(1, "### QUANTIFICATION FAILED - RESET\n");
 #if PHYSEC_DEBUG == 4
                     if (b_rssi)
-                        send_rssis(sync, m.rssi_msrmts, m.nb_msrmts, 5000);
+                        send_rssis(sync, m.values, m.nb_val, 5000);
 #endif
                     physec_log(1, "\n");
 
@@ -4852,7 +4929,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
         }
 
     }
-    free(m.rssi_msrmts);
+    free(m.values);
 }
 
 /**

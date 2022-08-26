@@ -3133,11 +3133,6 @@ void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
 
 }
 
-/*
-    key1 will conatin the concatenation of both keys.
-    return value:
-        concatinated key size.
-*/
 // Useful bitewise operation
 /**
  * Shift a number of bits to the right
@@ -3165,6 +3160,11 @@ static void shift_bits_right(uint8_t *array, int len, int shift) {
     memcpy(array, array_out, len);
 }
 
+/*
+    key1 will conatin the concatenation of both keys.
+    return value:
+        concatinated key size.
+*/
 int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int key2_size){
     int key2_kept_part_size = key2_size;
     int key2_max_size = 128-key1_size;

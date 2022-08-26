@@ -3055,135 +3055,6 @@ rssi_diff_infos(const PHYSEC_Sync *sync, const int8_t *rssis, uint16_t cnt)
 }
 #endif
 
-// -- Key management
-void peer_key_list_init(peer_key_list_t pkl){
-    *pkl = NULL;
-}
-
-void peer_key_free(struct peer_key *pk){
-    if(pk != NULL){
-        free(pk);
-    }
-}
-
-void peer_key_recursive_free(struct peer_key *pk){
-    if(pk != NULL){
-        peer_key_recursive_free(pk->next);
-        peer_key_free(pk);
-    }
-}
-
-void peer_key_list_free(peer_key_list_t pkl){
-    peer_key_recursive_free(*pkl);
-    *pkl = NULL;
-}
-
-void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, const uint8_t *key){
-
-    struct peer_key *pk = malloc(sizeof(struct peer_key));
-    pk->peer_id = peer_id;
-    memcpy(pk->key, key, 16*sizeof(uint8_t));
-    pk->next = *pkl;
-
-    *pkl = pk;
-
-}
-
-/*
-return value:
-    0  : peer_id not found, key_out = NULL.
-    1   : peer_id founded and the key is copied in the key_out.
-*/
-char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out){
-
-    struct peer_key *pk_curr = *pkl;
-
-    while(pk_curr != NULL){
-        if(pk_curr->peer_id == peer_id){
-            memcpy(key_out, pk_curr->key, 16*sizeof(uint8_t));
-            return 1;
-        }
-    }
-
-    return 0;
-
-}
-
-void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
-
-    struct peer_key *pk_prev = NULL;
-    struct peer_key *pk_curr = *pkl;
-
-    while(pk_curr != NULL){
-        if(pk_curr->peer_id == peer_id){
-            if(pk_prev == NULL){
-                (*pkl)->next = pk_curr->next;
-                peer_key_free(pk_curr);
-                pk_curr = (*pkl)->next;
-            }else{
-                pk_prev->next = pk_curr->next;
-                peer_key_free(pk_curr);
-                pk_curr = pk_prev->next;
-            }
-        }else{
-            pk_prev = pk_curr;
-            pk_curr = pk_curr->next;
-        }
-    }
-
-}
-
-// Useful bitewise operation
-/**
- * Shift a number of bits to the right
- *
- * @param   array       The array to shift
- * @param   len         The length of the array
- * @param   shift       The number of consecutive bits to shift. To the right if shift is positif.
- *
-*/
-static void shift_bits_right(uint8_t *array, int len, int shift) {
-
-    uint8_t macro_shift = shift / 8;
-    shift = shift % 8;
-
-    uint8_t array_out[len];
-    memset(array_out, 0, len);
-
-    for(int i = 0; i < len; i++) {
-        if(i+macro_shift < len)
-            array_out[i+macro_shift] += array[i]>>shift;
-        if(i+macro_shift+1 < len)
-            array_out[i+macro_shift+1] += array[i]<<(8-shift);
-    }
-
-    memcpy(array, array_out, len);
-}
-
-/*
-    key1 will conatin the concatenation of both keys.
-    return value:
-        concatinated key size.
-*/
-int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int key2_size){
-    int key2_kept_part_size = key2_size;
-    int key2_max_size = 128-key1_size;
-    if(key2_max_size>0){
-        if(key2_kept_part_size > key2_max_size){
-            key2_kept_part_size = key2_max_size;
-        }
-
-        shift_bits_right(key2, 16, key1_size);
-
-        for(int i = 0; i < 16; i++){
-            key1[i]+=key2[i];
-        }
-
-        return key1_size+key2_kept_part_size;
-    }
-    return 128;
-}
-
 // -- Packet management
 
 /**
@@ -3821,6 +3692,33 @@ uint8_t PHYSEC_quntification_get_level(
     return 0;
 }
 
+// Useful bitewise operation
+/**
+ * Shift a number of bits to the right
+ *
+ * @param   array       The array to shift
+ * @param   len         The length of the array
+ * @param   shift       The number of consecutive bits to shift. To the right if shift is positif.
+ *
+*/
+static void shift_bits_right(uint8_t *array, int len, int shift) {
+
+    uint8_t macro_shift = shift / 8;
+    shift = shift % 8;
+
+    uint8_t array_out[len];
+    memset(array_out, 0, len);
+
+    for(int i = 0; i < len; i++) {
+        if(i+macro_shift < len)
+            array_out[i+macro_shift] += array[i]>>shift;
+        if(i+macro_shift+1 < len)
+            array_out[i+macro_shift+1] += array[i]<<(8-shift);
+    }
+
+    memcpy(array, array_out, len);
+}
+
 /*
     Return value :
         number of generated bit (from left)
@@ -3922,6 +3820,30 @@ int PHYSEC_quntification(
 
     return 8*key_char_index+nbr_of_generated_bits_by_char;
 
+}
+
+/*
+    key1 will conatin the concatenation of both keys.
+    return value:
+        concatinated key size.
+*/
+int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int key2_size){
+    int key2_kept_part_size = key2_size;
+    int key2_max_size = 128-key1_size;
+    if(key2_max_size>0){
+        if(key2_kept_part_size > key2_max_size){
+            key2_kept_part_size = key2_max_size;
+        }
+
+        shift_bits_right(key2, 16, key1_size);
+
+        for(int i = 0; i < 16; i++){
+            key1[i]+=key2[i];
+        }
+
+        return key1_size+key2_kept_part_size;
+    }
+    return 128;
 }
 
 #if PHYSEC_DEBUG >= 3
@@ -4378,6 +4300,84 @@ entropy(uint8_t *bits, uint32_t nbits)
     float p0 = 1.0 - p1;
 
     return p0 * log2( 1 / p0 ) + p1 * log2(1 / p1);
+}
+
+// -- Key management
+void peer_key_list_init(peer_key_list_t pkl){
+    *pkl = NULL;
+}
+
+void peer_key_free(struct peer_key *pk){
+    if(pk != NULL){
+        free(pk);
+    }
+}
+
+void peer_key_recursive_free(struct peer_key *pk){
+    if(pk != NULL){
+        peer_key_recursive_free(pk->next);
+        peer_key_free(pk);
+    }
+}
+
+void peer_key_list_free(peer_key_list_t pkl){
+    peer_key_recursive_free(*pkl);
+    *pkl = NULL;
+}
+
+void peer_key_push(peer_key_list_t pkl, uint32_t peer_id, const uint8_t *key){
+
+    struct peer_key *pk = malloc(sizeof(struct peer_key));
+    pk->peer_id = peer_id;
+    memcpy(pk->key, key, 16*sizeof(uint8_t));
+    pk->next = *pkl;
+
+    *pkl = pk;
+
+}
+
+/*
+return value:
+    0  : peer_id not found, key_out = NULL.
+    1   : peer_id founded and the key is copied in the key_out.
+*/
+char peer_key_list_get_key_by_peer_id(peer_key_list_t pkl, uint32_t peer_id, uint8_t *key_out){
+
+    struct peer_key *pk_curr = *pkl;
+
+    while(pk_curr != NULL){
+        if(pk_curr->peer_id == peer_id){
+            memcpy(key_out, pk_curr->key, 16*sizeof(uint8_t));
+            return 1;
+        }
+    }
+
+    return 0;
+
+}
+
+void peer_key_delete_by_peer_id(peer_key_list_t pkl, uint32_t peer_id){
+
+    struct peer_key *pk_prev = NULL;
+    struct peer_key *pk_curr = *pkl;
+
+    while(pk_curr != NULL){
+        if(pk_curr->peer_id == peer_id){
+            if(pk_prev == NULL){
+                (*pkl)->next = pk_curr->next;
+                peer_key_free(pk_curr);
+                pk_curr = (*pkl)->next;
+            }else{
+                pk_prev->next = pk_curr->next;
+                peer_key_free(pk_curr);
+                pk_curr = pk_prev->next;
+            }
+        }else{
+            pk_prev = pk_curr;
+            pk_curr = pk_curr->next;
+        }
+    }
+
 }
 
 // -- Key Generation main functions 

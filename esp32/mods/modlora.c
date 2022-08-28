@@ -3568,7 +3568,7 @@ void PHYSEC_quntification_sort_rssi_window(int8_t *rssi_window, int8_t rssi_wind
 // ---> Density function estimation
 
 static
-struct density PHYSEC_quntification_get_density(int8_t *rssi_window){
+struct density PHYSEC_quntification_get_density(const int8_t *rssi_window){
 
     struct density d;
 
@@ -3627,11 +3627,14 @@ void PHYSEC_quntification_free_density(struct density *d){
     CDF : cumulative distribution function
 */
 static
-int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
+int8_t PHYSEC_quntification_inverse_cdf(double cdf, const struct density *d){
 
-    if(cdf < 0 || cdf > 1){
-        physec_log2(2, "%s: cdf isn't between 0 and 1.\n", __func__);
-        return -1;
+    if(cdf < 0.0){
+        cdf = 0.0;
+    }
+
+    if(cdf > 1.0){
+        cdf = 1.0;
     }
 
     int8_t q = d->q_0, q_rest;
@@ -3654,7 +3657,7 @@ int8_t PHYSEC_quntification_inverse_cdf(double cdf, struct density *d){
 // <--- Density function estimation
 
 static
-int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
+int8_t PHYSEC_quntification_compute_level_nbr(const struct density *d){
 
     double negatif_entropy = 0;
     double proba;
@@ -3666,7 +3669,7 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
         }
     }
 
-    return (int8_t) pow(2.0,-negatif_entropy);
+    return (int8_t) pow(2.0, floor(-negatif_entropy));
 }
 
 /*
@@ -3677,8 +3680,8 @@ int8_t PHYSEC_quntification_compute_level_nbr(struct density *d){
 static
 uint8_t PHYSEC_quntification_get_level(
     int8_t rssi,
-    int8_t *threshold_starts,
-    int8_t *threshold_ends,
+    const int8_t *threshold_starts,
+    const int8_t *threshold_ends,
     int8_t qunatification_level_nbr
 ){
     uint8_t level = 1;
@@ -3693,6 +3696,7 @@ uint8_t PHYSEC_quntification_get_level(
 }
 
 // Useful bitewise operation
+
 /**
  * Shift a number of bits to the right
  *
@@ -3702,6 +3706,9 @@ uint8_t PHYSEC_quntification_get_level(
  *
 */
 static void shift_bits_right(uint8_t *array, int len, int shift) {
+
+    if(shift < 0)
+        fprintf(stderr, "Error\n");
 
     uint8_t macro_shift = shift / 8;
     shift = shift % 8;
@@ -3719,6 +3726,48 @@ static void shift_bits_right(uint8_t *array, int len, int shift) {
     memcpy(array, array_out, len);
 }
 
+static void Measures_copy(PHYSEC_Measures *M, const PHYSEC_Measures *M_org){
+
+    M->delay = M_org->delay;
+    M->nb_val = M_org->nb_val;
+
+    M->values = malloc(M->nb_val * sizeof(int8_t));
+    memcpy(M->values, M_org->values, M->nb_val * sizeof(int8_t));
+
+}
+
+static void Measures_free(PHYSEC_Measures *M){
+    free(M->values);
+}
+
+/*
+    key1 will conatin the concatenation of both keys.
+    return value:
+        concatinated key size.
+*/
+int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, const uint8_t *key2_org, int key2_size){
+
+    uint8_t key2[16];
+    memcpy(key2, key2_org, 16);
+
+    int key2_kept_part_size = key2_size;
+    int key2_max_size = 128-key1_size;
+    if(key2_max_size>0){
+        if(key2_kept_part_size > key2_max_size){
+            key2_kept_part_size = key2_max_size;
+        }
+
+        shift_bits_right(key2, 16, key1_size);
+
+        for(int i = 0; i < 16; i++){
+            key1[i]+=key2[i];
+        }
+
+        return key1_size+key2_kept_part_size;
+    }
+    return 128;
+}
+
 /*
     Return value :
         number of generated bit (from left)
@@ -3726,44 +3775,52 @@ static void shift_bits_right(uint8_t *array, int len, int shift) {
 */
 static
 int PHYSEC_quntification(
-    PHYSEC_Measures *rssi_msermts,
+    const PHYSEC_Measures *msermts_org,
     double data_to_band_ration,
     uint8_t *key_output,
     PHYSEC_KeyGenStats *kgs
 ){
 
-    uint8_t nbr_of_generated_bits_by_char = 0, key_char_index = 0;
+    uint8_t nbr_of_generated_bits = 0;
     uint8_t nbr_of_processed_windows = 0;
     uint16_t rssi_window_align_index = 0;
     int8_t *rssi_window;
     int8_t qunatification_level_nbr;
     struct density density;
 
+    // creating a copy of rssi msr :
+    PHYSEC_Measures rssi_msermts;
+    Measures_copy(&rssi_msermts, msermts_org);
 
     // filtering
 
     uint32_t cur_start = 0;
     if (kgs)
         cur_start = mp_hal_ticks_ms();
-    PHYSEC_golay_filter(rssi_msermts);
+    
+    PHYSEC_golay_filter(&rssi_msermts);
 
     // same time measure estimation
-    PHYSEC_interpolation(rssi_msermts);
+    PHYSEC_interpolation(&rssi_msermts);
+    
     if (kgs)
         kgs->signal_process =  ((float) mp_hal_ticks_ms()-(float)cur_start) / 1000.0;
 
     if (kgs)
         cur_start = mp_hal_ticks_ms();
+    
     // preaparing for key generation
     memset(key_output, 0, 16*sizeof(uint8_t));
     uint8_t level;
-    int8_t rest_bits;
     uint8_t gen_bits;
 
-    while(rssi_msermts->nb_val - rssi_window_align_index  >= PHYSEC_QUNTIFICATION_WINDOW_LEN){
+    uint8_t key_tmp[16];
+    memset(key_tmp, 0, 16*sizeof(uint8_t));
+
+    while(rssi_msermts.nb_val - rssi_window_align_index  >= PHYSEC_QUNTIFICATION_WINDOW_LEN){
 
         // rssi window
-        rssi_window = rssi_msermts->values+rssi_window_align_index;
+        rssi_window = rssi_msermts.values+rssi_window_align_index;
 
         // computing density
         density = PHYSEC_quntification_get_density(rssi_window);
@@ -3792,21 +3849,16 @@ int PHYSEC_quntification(
                 qunatification_level_nbr
             );
             if(level > 0){
-                level--;
-                rest_bits = gen_bits - (8-nbr_of_generated_bits_by_char);
-                if(rest_bits>0){
-                    key_output[key_char_index] += level>>rest_bits;
-                    key_char_index++;
-                    if(key_char_index==16){
-                        return 128;
-                    }
-                    key_output[key_char_index] += level<<(8+gen_bits-rest_bits);
-                    nbr_of_generated_bits_by_char = rest_bits;
-                }else{
-                    key_output[key_char_index] += level<<(8-nbr_of_generated_bits_by_char-gen_bits);
-                    nbr_of_generated_bits_by_char += gen_bits;
-                }
 
+                level--;
+                key_tmp[0] = level << (8 - gen_bits);
+
+                nbr_of_generated_bits = PHYSEC_key_concatenation(key_output, nbr_of_generated_bits, key_tmp, gen_bits);
+
+                if(nbr_of_generated_bits >= 128){
+                    Measures_free(&rssi_msermts);
+                    return nbr_of_generated_bits;
+                }
             }
         }
 
@@ -3815,35 +3867,14 @@ int PHYSEC_quntification(
         rssi_window_align_index = (uint16_t)(nbr_of_processed_windows*PHYSEC_QUNTIFICATION_WINDOW_LEN);
     }
 
+    // free
+    Measures_free(&rssi_msermts);
+
     if (kgs)
         kgs->quantization = ((float)mp_hal_ticks_ms()-(float)cur_start) / 1000.0;
 
-    return 8*key_char_index+nbr_of_generated_bits_by_char;
+    return nbr_of_generated_bits;
 
-}
-
-/*
-    key1 will conatin the concatenation of both keys.
-    return value:
-        concatinated key size.
-*/
-int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, uint8_t *key2, int key2_size){
-    int key2_kept_part_size = key2_size;
-    int key2_max_size = 128-key1_size;
-    if(key2_max_size>0){
-        if(key2_kept_part_size > key2_max_size){
-            key2_kept_part_size = key2_max_size;
-        }
-
-        shift_bits_right(key2, 16, key1_size);
-
-        for(int i = 0; i < 16; i++){
-            key1[i]+=key2[i];
-        }
-
-        return key1_size+key2_kept_part_size;
-    }
-    return 128;
 }
 
 #if PHYSEC_DEBUG >= 3
@@ -4173,7 +4204,6 @@ static void PHYSEC_compute_key_error(const matrix *A, const int *y, int *x_out){
 
     // Init residual
     int residual[PHYSEC_CS_COMPRESSED_SIZE];
-    int residual_tmp[PHYSEC_CS_COMPRESSED_SIZE];
     memcpy(residual, y, PHYSEC_CS_COMPRESSED_SIZE * sizeof(int));
 
     double residual_norm2;

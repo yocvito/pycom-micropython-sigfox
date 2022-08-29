@@ -227,7 +227,8 @@ typedef enum {
 // -- -- sizes and limits
 // -- -- -- Measures
 #define PHYSEC_N_MAX_MEASURE        65536
-#define PHYSEC_N_REQUIRED_MEASURE   20
+#define PHYSEC_N_REQUIRED_MEASURE   60
+#define PHYSEC_N_NEW_REQUIRED_MEASURE   30
 
 // 128 bits = 16 bytes = a 16-char-table.
 // For now, if this value is changed, the code will not going to adapt.
@@ -4382,6 +4383,70 @@ entropy(uint8_t *bits, uint32_t nbits)
 
 // -- Key Generation main functions 
 
+static void PHYSEC_sampling(const uint16_t n_required,
+                            const uint16_t cnt,
+                            const PHYSEC_Sync *sync, 
+                            const PHYSEC_MeasureType mt, 
+                            PHYSEC_Measures *m)
+{
+    uint16_t cur_cnt = 0;
+    uint32_t probe_start = 0;
+    uint32_t last_delay = 0;
+    uint32_t delay_sum = 0;
+
+
+    for (int i=0; i<n_required; )
+    {
+        cur_cnt = cnt + i;
+
+        // send probe
+        PHYSEC_Packet pkt = {
+            .identifier = PHYSEC_KG_PKT_IDENTIFIER,
+            .type = PHYSEC_PT_PROBE,
+            .dev_id = { 0 },
+            .payload = { 0 }
+        };
+        memcpy(pkt.dev_id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
+
+        PHYSEC_Probe *probe = (PHYSEC_Probe*) &(pkt.payload);
+        probe->cnt = cur_cnt;
+
+        lora_send((uint8_t*) &pkt, (sizeof(PHYSEC_Probe) + PHYSEC_KG_PKT_HEADER_SIZE), -1);
+
+        probe_start = mp_hal_ticks_ms();
+
+        physec_log(3, ">>> PROBE SENT\n");
+        physec_hexdump(3, (uint8_t*)probe, sizeof(PHYSEC_Probe));
+        physec_log2(3, "probe->cnt=%d, cnt=%d\n", probe->cnt, cnt);
+        physec_log(3, "\n");
+
+        // wait probe response, verify and increment
+        int8_t m_val = 0;
+        uint32_t wtime = 0;
+        if ( wait_probe(sync, PHYSEC_MT_SNR, &m_val, &wtime, lora_obj.physec_timeout) == cur_cnt && wtime < lora_obj.physec_timeout)
+        {
+            last_delay = (mp_hal_ticks_ms()-probe_start) - toa(lora_obj.sf);
+            delay_sum += last_delay;
+
+            physec_log(3, "<<< PROBE ANSWER RECEIVED\n");
+            physec_log(3, "\n");
+
+            // store characteristic of last probe
+            m->values[i] = m_val;
+            i++;
+
+            //mp_hal_delay_ms(PHYSEC_COHERENCE_TIME);
+        }
+        //else if (cur_cnt > 0)
+        else
+            delay_sum -= last_delay;
+
+    }
+    m->nb_val = n_required;
+    m->delay = ((float) delay_sum / (float) (n_required)) / lora_obj.physec_timeout;
+
+}
+
 /**
  * @brief Initiate the key generation with the waiter (Bob), Takes a pair of identifiers to detect 
  *        the packets transmitted between the two involved devices
@@ -4397,8 +4462,6 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
     bool generated = false;
     PHYSEC_Key key = { 0 };
     int key_len = 0;
-    uint16_t last_cnt_before_m_init = 0;
-    uint16_t last_incomplete_window_size;
 
     uint32_t cur_stage_start = 0;
     if (kgs)
@@ -4407,139 +4470,59 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
     PHYSEC_Key P;
     int32_t nbits;
 
-    int8_t *rssis = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t));
 #if PHYSEC_DEBUG == 4
+    int8_t *rssis = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t));
     int8_t *raw_rssis = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t));
 #endif
-    uint16_t n_required = PHYSEC_N_REQUIRED_MEASURE;
-    PHYSEC_Measures m = { 0 };
-    m.values = calloc(PHYSEC_N_MAX_MEASURE, sizeof(int8_t)); // alloc failure is already caught by micro python
 
+    uint16_t n_required = PHYSEC_N_REQUIRED_MEASURE;
 
     // Generation loop
     uint16_t cnt = 0;
-    uint32_t probe_start = 0;
-    uint32_t delay_sum = 0;
-    uint32_t last_delay = 0;
+    uint16_t prev_cnt = 0;
+    int8_t measure_frame[PHYSEC_N_REQUIRED_MEASURE] = { 0 };
+    PHYSEC_Measures mtmp = { 0 };
+    mtmp.values = measure_frame;
+
     while ( !generated )
     {
         if (kgs)
             cur_stage_start = mp_hal_ticks_ms();
         
         // Phase 0 : Probing and measurements
-        while ( cnt < n_required)
-        {
-            // send probe
-            PHYSEC_Packet pkt = {
-                .identifier = PHYSEC_KG_PKT_IDENTIFIER,
-                .type = PHYSEC_PT_PROBE,
-                .dev_id = { 0 },
-                .payload = { 0 }
-            };
-            memcpy(pkt.dev_id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
-            PHYSEC_Probe *probe = (PHYSEC_Probe*) &(pkt.payload);
-            probe->cnt = cnt;
-            lora_send((uint8_t*) &pkt, (sizeof(PHYSEC_Probe) + PHYSEC_KG_PKT_HEADER_SIZE), -1);
-            probe_start = mp_hal_ticks_ms();
-
-
-            physec_log(3, ">>> PROBE SENT\n");
-            physec_hexdump(3, (uint8_t*)probe, sizeof(PHYSEC_Probe));
-            physec_log2(3, "probe->cnt=%d, cnt=%d\n", probe->cnt, cnt);
-            physec_log(3, "\n");
-
-            // wait probe response, verify and increment
-            int8_t rssi = 0;
-            uint32_t wtime = 0;
-            if ( wait_probe(sync, PHYSEC_MT_SNR, &rssi, &wtime, lora_obj.physec_timeout) == cnt && wtime < lora_obj.physec_timeout)
-            {
-                last_delay = (mp_hal_ticks_ms()-probe_start) - toa(lora_obj.sf);
-                delay_sum += last_delay;
-
-                physec_log(3, "<<< PROBE ANSWER RECEIVED\n");
-                physec_log(3, "\n");
-
-                // store rssi of last probe
-                m.values[cnt-last_cnt_before_m_init] = rssi;
-                rssis[cnt] = rssi;
-                cnt++;
-
-                //mp_hal_delay_ms(PHYSEC_COHERENCE_TIME);
-            }
-            else if (cnt > 0)
-                delay_sum -= last_delay;
-        }
-        m.delay = ((float) delay_sum / (float) (cnt)) / lora_obj.physec_timeout;
+        PHYSEC_sampling(n_required, cnt, sync, PHYSEC_MT_SNR, &mtmp);
+        prev_cnt = cnt;
+        cnt += n_required;
         if (kgs)
         {
             kgs->measure += (float)(mp_hal_ticks_ms() - cur_stage_start) / 1000.0;
-            kgs->avg_delay = (uint32_t) ((float) delay_sum / (float) (cnt));
+            // for now erase last delay (must be better to calculate the delay over all measures)
+            kgs->avg_delay = mtmp.delay;
         }
-
-        // Phase 1,2 : signal processing + quantization
-        m.nb_val = cnt - last_cnt_before_m_init;
-        last_incomplete_window_size = m.nb_val % PHYSEC_QUNTIFICATION_WINDOW_LEN;
-        last_cnt_before_m_init = cnt - last_incomplete_window_size;
 
         #if PHYSEC_DEBUG == 4
-            memcpy(raw_rssis, rssis, cnt * sizeof(int8_t));
+            memcpy(raw_rssis+prev_cnt, mtmp.values, n_required * sizeof(int8_t));
+            printf("### RSSI BEFORE QUANTIFICATION\n");
+            display_m_vals(raw_rssis, cnt);
         #endif
 
+
+
         physec_log(1, "### QUANTIFICATION\n\n");
-        // need to clear some code in this part
-        { // quantification
-            PHYSEC_Measures values;
-            values.nb_val = m.nb_val-last_incomplete_window_size;
-            values.delay = m.delay;
 
-            int8_t msrmts[values.nb_val];
-            values.values = msrmts;
-            memcpy(values.values, m.values, values.nb_val*sizeof(int8_t));
+        nbits = PHYSEC_quntification(&mtmp, 0.1, P.key, kgs);
+        key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
 
-            nbits = PHYSEC_quntification(&values, 0.1, P.key, kgs);
-            key_len = PHYSEC_key_concatenation(key.key, key_len, P.key, nbits);
-
-            // need to delete from here and also delete related variables
-            int8_t *msrmts2 = malloc(cnt * sizeof(int8_t));
-            PHYSEC_Measures values2 = { 0 };
-            values2.nb_val = cnt;
-            values2.delay = 0;
-            values2.values = msrmts2;
-            PHYSEC_Key P2 = { 0 };
-
-             memcpy(values2.values, rssis, cnt*sizeof(int8_t));
-            int nbits2 = PHYSEC_quntification(&values2, 0.1, P2.key, NULL);
-#if PHYSEC_DEBUG >= 2
-            printf("%d - %d - %d\n", nbits, key_len, nbits2);
-            if (memcmp(&P2, &key, sizeof(PHYSEC_Key)) != 0)
-            {
-                printf("Generated keys are different\n");
-                display_key_bits(&P2);
-                display_key_bits(&key);
-            }
-#endif
-            free(msrmts2);
-        }
-
-
-        // init m
-        if(last_incomplete_window_size > 0){
-            // save the last incomplete window
-            int8_t the_last_incomplete_window[last_incomplete_window_size];
-            memcpy(
-                the_last_incomplete_window,
-                m.values+(m.nb_val-last_incomplete_window_size),
-                last_incomplete_window_size*sizeof(int8_t)
-            );
-            memcpy(m.values, the_last_incomplete_window, last_incomplete_window_size*sizeof(int8_t));
-        }
+        #if PHYSEC_DEBUG == 4
+            memcpy(rssis+prev_cnt, mtmp.values, n_required * sizeof(int8_t));
+        #endif
 
         // check if bit key len >= PHYSEC_KEY_SIZE, else increase n_required
         if (key_len < PHYSEC_KEY_SIZE)
         {
             physec_log2(2, "generated bits %d/128 with %d measures\n", key_len, cnt);
 
-            n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
+            n_required = PHYSEC_N_NEW_REQUIRED_MEASURE;
             continue;
         }
 
@@ -4547,6 +4530,11 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
         physec_hexdump(2,(uint8_t*) key.key, PHYSEC_KEY_SIZE_BYTES);
         physec_verb_statement(2, display_key_bits(&key));
         physec_log(1, "\n");
+
+        #if PHYSEC_DEBUG == 4
+            printf("\n### RSSI AFTER QUANTIFICATION\n");
+            display_m_vals(raw_rssis, cnt);
+        #endif
 
         if (kgs)
             cur_stage_start = mp_hal_ticks_ms();
@@ -4562,12 +4550,6 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
         lora_send((uint8_t*) &pkt, (sizeof(PHYSEC_KeyGen) + PHYSEC_KG_PKT_HEADER_SIZE), -1);
 
         physec_log(3, ">>> KGS START PKT SENT\n");
-        #if PHYSEC_DEBUG == 4
-            if ( rssi_diff_infos(sync, raw_rssis, cnt) )
-            {
-                rssi_diff_infos(sync, rssis, cnt);
-            }
-        #endif
         physec_log(4, "\n");
         physec_hexdump(3, (uint8_t*) pkt.payload, sizeof(PHYSEC_KeyGen));
         physec_log(3, "\n");
@@ -4666,6 +4648,7 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
 
 #if PHYSEC_DEBUG == 4
             free(raw_rssis);
+            free(rssis);
 #endif
             if (kgs)
             {
@@ -4675,7 +4658,6 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             }
 
             generated = true;
-            free(rssis);
         }
         // quantification failed to gen 128 bits on the other side, thus reset
         else if (pkt_type == PHYSEC_PT_RESET)
@@ -4685,13 +4667,11 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             if (kgs)
                 kgs->n_retries++;
             cnt = 0;
-            last_cnt_before_m_init = 0;
             memset(&key, 0, sizeof(PHYSEC_Key));
             key_len = 0;
-            n_required += PHYSEC_QUNTIFICATION_WINDOW_LEN;
+            n_required = PHYSEC_N_REQUIRED_MEASURE;
         }
     }
-    free(m.values);
 }
 
 #define TEST_WDT_TIMER_MS              10*(60*1000)    // 10 minutes
@@ -4715,8 +4695,6 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
         .delay = 0
     };
 
-    uint32_t sum_delay = 0;
-    uint32_t last_delay = 0;
     uint16_t last_cnt = 255;
     uint16_t cnt = 0;
     PHYSEC_Key P = { .key = { 0 } };
@@ -4827,26 +4805,17 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
                 int32_t nbits;
 
-#if PHYSEC_DEBUG == 4
-                bool b_rssi = send_rssis(sync, m.values, m.nb_val, 7000);
-#endif
-                physec_log(2, "### RSSI BEFORE QUANTIFICATION\n");
-#if PHYSEC_DEBUG >= 2
-                display_m_vals(m.values, cnt);
-#endif
+                physec_log(4, "### RSSI BEFORE QUANTIFICATION\n");
+                physec_verb_statement(4, display_m_vals(m.values, cnt));
 
                 // if we did not get enough bits, we reset measurements
 
                 physec_log(1, "### QUANTIFICATION\n\n");
                 if ((nbits = PHYSEC_quntification(&m, 0.1, P.key, kgs)) >= PHYSEC_KEY_SIZE)
                 {
-#if PHYSEC_DEBUG == 4
-                    if (b_rssi)
-                        send_rssis(sync, m.values, m.nb_val, 5000);
-#endif
 
-                    physec_log(2, "### RSSI AFTER QUANTIFICATION\n");
-                    physec_verb_statement(2, display_m_vals(m.values, cnt));
+                    physec_log(4, "### RSSI AFTER QUANTIFICATION\n");
+                    physec_verb_statement(4, display_m_vals(m.values, cnt));
 
                     physec_hexdump(2, (uint8_t*) &P, PHYSEC_KEY_SIZE_BYTES);
                     physec_verb_statement(2, display_key_bits(&P));
@@ -4893,14 +4862,10 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 else
                 {
                     physec_log(1, "### QUANTIFICATION FAILED - RESET\n");
-#if PHYSEC_DEBUG == 4
-                    if (b_rssi)
-                        send_rssis(sync, m.values, m.nb_val, 5000);
-#endif
                     physec_log(1, "\n");
 
+
                     cnt = 0;
-                    sum_delay = 0;
                     pkt.type = PHYSEC_PT_RESET;
 
                     if (kgs)

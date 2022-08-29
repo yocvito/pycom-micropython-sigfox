@@ -144,8 +144,8 @@ ifeq ($(PHYSEC_ENABLED), 1)
 endif
 
 ifneq ($(PHYSEC_DEBUG), 0)
-    $(info PHYSEC debug activated)
-    CFLAGS += -DPHYSEC_DEBUG=$(PHYSEC_DEBUG)
+    $(info PHYSEC debug activated (level ${PHYSEC_DEBUG}) )
+    CFLAGS += -DPHYSEC_DEBUG=${PHYSEC_DEBUG}
 else
     CFLAGS += -DPHYSEC_DEBUG=0
 endif

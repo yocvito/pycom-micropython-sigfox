@@ -226,8 +226,9 @@ typedef enum {
 
 // -- -- sizes and limits
 // -- -- -- Measures
-#define PHYSEC_N_MAX_MEASURE        65536
-#define PHYSEC_N_REQUIRED_MEASURE   20
+#define PHYSEC_N_MAX_MEASURE                65536
+#define PHYSEC_N_REQUIRED_MEASURE           60
+#define PHYSEC_N_NEW_REQUIRED_MEASURE       30
 
 // 128 bits = 16 bytes = a 16-char-table.
 // For now, if this value is changed, the code will not going to adapt.
@@ -4749,7 +4750,6 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
     uint32_t last_delay = 0;
     uint16_t last_cnt = 255;
     uint16_t cnt = 0;
-    PHYSEC_Key P = { .key = { 0 } };
     uint32_t cur_stage_start;
     if (kgs)
         memset(kgs, 0, sizeof(PHYSEC_KeyGenStats));
@@ -4844,9 +4844,6 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                     kgs->avg_delay = (uint32_t)((float) m.delay * (float)lora_obj.physec_timeout);
                 }
 
-                memset(&P, 0, sizeof(PHYSEC_Key));
-                // generate key
-
                 PHYSEC_Packet pkt = {
                     .identifier = PHYSEC_KG_PKT_IDENTIFIER,
                     .type = PHYSEC_PT_KEYGEN,
@@ -4855,7 +4852,6 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 };
                 memcpy(pkt.dev_id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                 PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
-                int32_t nbits;
 
 #if PHYSEC_DEBUG == 4
                 bool b_rssi = send_rssis(sync, m.values, m.nb_val, 7000);
@@ -4865,10 +4861,55 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 display_m_vals(m.values, cnt);
 #endif
 
-                // if we did not get enough bits, we reset measurements
+                // PHYSEC_N_REQUIRED_MEASURE
+                // PHYSEC_N_NEW_REQUIRED_MEASURE
 
+                // generate key
+                
                 physec_log(1, "### QUANTIFICATION\n\n");
-                if ((nbits = PHYSEC_quntification(&m, 0.1, P.key, kgs)) >= PHYSEC_KEY_SIZE)
+
+                if((m.nb_val - PHYSEC_N_REQUIRED_MEASURE) < 0 || (m.nb_val - PHYSEC_N_REQUIRED_MEASURE) % PHYSEC_N_NEW_REQUIRED_MEASURE != 0){
+                    fprintf(stderr, "m.nb_val does not recpect this condition : m.nb_val = PHYSEC_N_REQUIRED_MEASURE + k * PHYSEC_N_NEW_REQUIRED_MEASURE\n");
+                }
+
+                PHYSEC_Key P;
+                int32_t P_len = 0;
+                memset(&P, 0, sizeof(PHYSEC_Key));
+
+                PHYSEC_Key P_tmp;
+                int32_t P_tmp_len = 0;
+
+                PHYSEC_Measures m_tmp;
+                m_tmp.delay = 0;
+                m_tmp.values = malloc(sizeof(uint8_t) * PHYSEC_N_REQUIRED_MEASURE);
+
+                int32_t measures_index = 0;
+                while(measures_index < m.nb_val && P_len < PHYSEC_KEY_SIZE){
+
+                    // construct measurement part
+
+                    if(measures_index == 0){
+                        memcpy(m_tmp.values, m.values, PHYSEC_N_REQUIRED_MEASURE * sizeof(uint8_t));
+                        m_tmp.nb_val = PHYSEC_N_REQUIRED_MEASURE;
+                        measures_index += PHYSEC_N_REQUIRED_MEASURE;
+                    }else{
+                        memcpy(m_tmp.values, m.values + measures_index, PHYSEC_N_NEW_REQUIRED_MEASURE * sizeof(uint8_t));
+                        m_tmp.nb_val = PHYSEC_N_NEW_REQUIRED_MEASURE;
+                        measures_index += PHYSEC_N_NEW_REQUIRED_MEASURE;
+                    }
+
+                    // measurement part quantization
+                    P_tmp_len = PHYSEC_quntification(&m_tmp, 0.1, P_tmp.key, kgs);
+
+                    // Key concatenation
+                    P_len = PHYSEC_key_concatenation(P.key, P_len, P_tmp.key, P_tmp_len);
+
+                }
+
+                free(m_tmp.values);
+
+                
+                if (P_len >= PHYSEC_KEY_SIZE)
                 {
 #if PHYSEC_DEBUG == 4
                     if (b_rssi)
@@ -4921,7 +4962,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                     generated = true;
                 }
                 else
-                {
+                { // if we did not get enough bits, we reset measurements
                     physec_log(1, "### QUANTIFICATION FAILED - RESET\n");
 #if PHYSEC_DEBUG == 4
                     if (b_rssi)

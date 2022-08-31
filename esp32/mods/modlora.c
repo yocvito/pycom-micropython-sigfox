@@ -227,7 +227,7 @@ typedef enum {
 // -- -- sizes and limits
 // -- -- -- Measures
 #define PHYSEC_N_MAX_MEASURE                65536
-#define PHYSEC_N_REQUIRED_MEASURE           400
+#define PHYSEC_N_REQUIRED_MEASURE           60
 #define PHYSEC_N_NEW_REQUIRED_MEASURE       30
 
 // 128 bits = 16 bytes = a 16-char-table.
@@ -4290,6 +4290,10 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
     PHYSEC_Measures mtmp = { 0 };
     mtmp.values = measure_frame;
 
+    #if PHYSEC_DEBUG >= 1
+        int measurment_pack_index = 0;
+    #endif
+
     while ( !generated )
     {
         if (kgs)
@@ -4310,6 +4314,20 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             memcpy(raw_rssis+prev_cnt, mtmp.values, n_required * sizeof(int8_t));
             printf("### RSSI BEFORE QUANTIFICATION\n");
             display_m_vals(raw_rssis, cnt);
+        #endif
+
+        // data report
+        #if PHYSEC_DEBUG >= 1
+            printf("(plot)\n");
+            printf("measurment_pack_%d\n", measurment_pack_index); //id
+            printf("RSSI Measurments : Pack %d\n", measurment_pack_index); //title
+            printf("Time unit\n"); // xlabel
+            printf("RSSI\n"); // ylabel
+            for(int i = 0; i < mtmp.nb_val; i++){
+                printf("%d, %d\n", i, mtmp.values[i]);
+            }
+            printf("(plot end)\n");
+            measurment_pack_index++;
         #endif
 
 
@@ -4631,6 +4649,10 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 m_tmp.delay = 0;
                 m_tmp.values = malloc(sizeof(uint8_t) * PHYSEC_N_REQUIRED_MEASURE);
 
+                #if PHYSEC_DEBUG >= 1
+                    int measurment_pack_index = 0;
+                #endif
+
                 int32_t measures_index = 0;
                 while(measures_index < m.nb_val && P_len < PHYSEC_KEY_SIZE){
 
@@ -4645,6 +4667,17 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                         m_tmp.nb_val = PHYSEC_N_NEW_REQUIRED_MEASURE;
                         measures_index += PHYSEC_N_NEW_REQUIRED_MEASURE;
                     }
+
+                    // data report
+                    #if PHYSEC_DEBUG >= 1
+                        printf("(plot)\n");
+                        printf("measurment_pack_%d\n", measurment_pack_index); //id
+                        for(int i = 0; i < m_tmp.nb_val; i++){
+                            printf("%d, %d\n", i, m_tmp.values[i]);
+                        }
+                        printf("(plot end)\n");
+                        measurment_pack_index++;
+                    #endif
 
                     // measurement part quantization
                     P_tmp_len = PHYSEC_quantization(&m_tmp, PHYSEC_DATA_TO_BAND_RATIO, P_tmp.key, kgs);

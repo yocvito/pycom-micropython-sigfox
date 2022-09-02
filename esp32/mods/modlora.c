@@ -4290,7 +4290,7 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
     PHYSEC_Measures mtmp = { 0 };
     mtmp.values = measure_frame;
 
-    #if PHYSEC_DEBUG >= 1
+    #if PHYSEC_DEBUG >= 4
         int measurment_pack_index = 0;
     #endif
 
@@ -4317,7 +4317,7 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
         #endif
 
         // data report
-        #if PHYSEC_DEBUG >= 1
+        #if PHYSEC_DEBUG >= 4
             printf("(plot)\n");
             printf("measurment_pack_%d\n", measurment_pack_index); //id
             printf("RSSI Measurments : Pack %d\n", measurment_pack_index); //title
@@ -4649,7 +4649,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 m_tmp.delay = 0;
                 m_tmp.values = malloc(sizeof(uint8_t) * PHYSEC_N_REQUIRED_MEASURE);
 
-                #if PHYSEC_DEBUG >= 1
+                #if PHYSEC_DEBUG >= 4
                     int measurment_pack_index = 0;
                 #endif
 
@@ -4669,7 +4669,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                     }
 
                     // data report
-                    #if PHYSEC_DEBUG >= 1
+                    #if PHYSEC_DEBUG >= 4
                         printf("(plot)\n");
                         printf("measurment_pack_%d\n", measurment_pack_index); //id
                         for(int i = 0; i < m_tmp.nb_val; i++){

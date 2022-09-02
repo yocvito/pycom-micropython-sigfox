@@ -238,7 +238,7 @@ typedef enum {
 #define PHYSEC_KEY_SIZE_BYTES       (int16_t) (PHYSEC_KEY_SIZE / 8)
 
 
-#define PHYSEC_DATA_TO_BAND_RATIO   0.9
+#define PHYSEC_DATA_TO_BAND_RATIO   0.7
 
 // PHYSEC_Packet defines
 #define PHYSEC_DEV_ID_LEN           4
@@ -4383,6 +4383,26 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             
         }
 
+        // data report
+            #if PHYSEC_DEBUG >= 4
+            
+                printf("(value)\n");
+                
+                printf("generated_key_at_quantization\n"); //id
+                printf("Generated key at quantization\n"); //Name
+                
+                // vlaue
+                {
+                    int key_vec[PHYSEC_KEY_SIZE];
+                    vec_key2vec(&key, key_vec);
+                    for(int i = 0; i < PHYSEC_KEY_SIZE; i++){
+                        printf("%d", key_vec[i]);
+                    }
+                    printf("\n");
+                }
+
+            #endif
+
 
         #if PHYSEC_DEBUG == 4
             printf("\n### RSSI AFTER QUANTIFICATION\n");
@@ -4487,6 +4507,26 @@ PHYSEC_initiate_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenSta
             physec_hexdump(3, (uint8_t*) k, PHYSEC_KEY_SIZE_BYTES);
             physec_log2(2, "Entropy after PA: %f\n", entropy(key.key, key_len));
             physec_log(1, "\n");
+
+            // data report
+            #if PHYSEC_DEBUG >= 4
+            
+                printf("(value)\n");
+                
+                printf("generated_key\n"); //id
+                printf("Generated key\n"); //Name
+                
+                // vlaue
+                {
+                    int key_vec[PHYSEC_KEY_SIZE];
+                    vec_key2vec(k, key_vec);
+                    for(int i = 0; i < PHYSEC_KEY_SIZE; i++){
+                        printf("%d", key_vec[i]);
+                    }
+                    printf("\n");
+                }
+
+            #endif
 
 #if PHYSEC_DEBUG == 4
             free(raw_rssis);
@@ -4722,6 +4762,27 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                         cur_stage_start = mp_hal_ticks_ms();
                         kgs->entropy_pk = entropy(P.key, PHYSEC_KEY_SIZE_BYTES);
                     }
+
+                    // data report
+                    #if PHYSEC_DEBUG >= 4
+                    
+                        printf("(value)\n");
+                        
+                        printf("generated_key_at_quantization\n"); //id
+                        printf("Generated key at quantization\n"); //Name
+                        
+                        // vlaue
+                        {
+                            int key_vec[PHYSEC_KEY_SIZE];
+                            vec_key2vec(&P, key_vec);
+                            for(int i = 0; i < PHYSEC_KEY_SIZE; i++){
+                                printf("%d", key_vec[i]);
+                            }
+                            printf("\n");
+                        }
+
+                    #endif
+
                     PHYSEC_privacy_amplification(&P);
                     if (kgs)
                     {
@@ -4743,6 +4804,26 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                         kgs->entropy_k = entropy(P.key, PHYSEC_KEY_SIZE_BYTES);
                         kgs->total = kgs->measure + kgs->signal_process + kgs->quantization + kgs->reconciliation + kgs->privacy_amp;
                     }
+
+                    // data report
+                    #if PHYSEC_DEBUG >= 4
+                    
+                        printf("(value)\n");
+                        
+                        printf("generated_key\n"); //id
+                        printf("Generated key\n"); //Name
+                        
+                        // vlaue
+                        {
+                            int key_vec[PHYSEC_KEY_SIZE];
+                            vec_key2vec(k, key_vec);
+                            for(int i = 0; i < PHYSEC_KEY_SIZE; i++){
+                                printf("%d", key_vec[i]);
+                            }
+                            printf("\n");
+                        }
+
+                    #endif
 
                     generated = true;
                 }

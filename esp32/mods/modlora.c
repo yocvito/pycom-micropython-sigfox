@@ -237,7 +237,11 @@ typedef enum {
 // future update: need to handle bits key size which are not byte aligned
 #define PHYSEC_KEY_SIZE_BYTES       (int16_t) (PHYSEC_KEY_SIZE / 8)
 
+// Channel Sampling
+#define PHYSEC_PROBE_FREQUENCY  20 // probe per second
+#define PHYSEC_PROBE_PERIOD    1/PHYSEC_PROBE_FREQUENCY * 1000 // ms
 
+// Quantization
 #define PHYSEC_DATA_TO_BAND_RATIO   0.7
 
 // PHYSEC_Packet defines
@@ -4224,9 +4228,17 @@ static void PHYSEC_sampling(const uint16_t n_required,
     uint32_t last_delay = 0;
     uint32_t delay_sum = 0;
 
+    uint32_t tick;
+
 
     for (int i=0; i<n_required; )
     {
+
+        tick = mp_hal_ticks_ms();
+        if( i>0 && ((tick - probe_start) < PHYSEC_PROBE_PERIOD)){
+            sleep(tick - probe_start);
+        }
+
         cur_cnt = cnt + i;
 
         // send probe
@@ -4273,7 +4285,7 @@ static void PHYSEC_sampling(const uint16_t n_required,
 
     }
     m->nb_val = n_required;
-    m->delay = ((float) delay_sum / (float) (n_required)) / lora_obj.physec_timeout;
+    m->delay = ((float) delay_sum / (float) (n_required)) / PHYSEC_PROBE_PERIOD;
 
 }
 

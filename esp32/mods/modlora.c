@@ -238,8 +238,8 @@ typedef enum {
 #define PHYSEC_KEY_SIZE_BYTES       (int16_t) (PHYSEC_KEY_SIZE / 8)
 
 // Channel Sampling
-#define PHYSEC_PROBE_FREQUENCY  20 // probe per second
-#define PHYSEC_PROBE_PERIOD    1/PHYSEC_PROBE_FREQUENCY * 1000 // ms
+#define PHYSEC_PROBE_FREQUENCY  20.0 // probe per second
+#define PHYSEC_PROBE_PERIOD    1.0/PHYSEC_PROBE_FREQUENCY * 1000.0 // ms
 
 // Quantization
 #define PHYSEC_DATA_TO_BAND_RATIO   0.7
@@ -3604,6 +3604,40 @@ int PHYSEC_quantization(
         cur_start = mp_hal_ticks_ms();
     
     PHYSEC_golay_filter(&rssi_msermts);
+
+    #if PHYSEC_DEBUG >= 4
+
+        static char first_pack = 1;
+
+        if(first_pack){
+
+            first_pack = 0;
+
+            // Filtred rssi
+            printf("(plot)\n");
+            printf("filtred_measurment_pack_0\n"); //id
+            printf("Filtred RSSI Measurments : Pack 0\n"); //title
+            printf("Time unit\n"); // xlabel
+            printf("Filtred RSSI\n"); // ylabel
+            for(int i = 0; i < rssi_msermts.nb_val; i++){
+                printf("%d, %d\n", i, rssi_msermts.values[i]);
+            }
+            printf("(plot end)\n");
+
+            // Probe frequency
+            printf("(value)\n");
+            printf("probe_frequency_ms\n"); //id
+            printf("Probe frequency in ms\n"); //Name
+            printf("%f\n", PHYSEC_PROBE_FREQUENCY); //Vlaue
+
+            // Measurement delay
+            printf("(value)\n");
+            printf("measurement_delay_ms\n"); //id
+            printf("Measurement delay in ms\n"); //Name
+            printf("%f\n", rssi_msermts.delay * PHYSEC_PROBE_PERIOD); //Vlaue
+        }
+
+    #endif
 
     // same time measure estimation
     PHYSEC_interpolation(&rssi_msermts);

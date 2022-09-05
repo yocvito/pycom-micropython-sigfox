@@ -228,8 +228,8 @@ typedef enum {
 // -- -- sizes and limits
 // -- -- -- Measures
 #define PHYSEC_N_MAX_MEASURE                65536
-#define PHYSEC_N_REQUIRED_MEASURE           60
-#define PHYSEC_N_NEW_REQUIRED_MEASURE       30
+#define PHYSEC_N_REQUIRED_MEASURE           100
+#define PHYSEC_N_NEW_REQUIRED_MEASURE       100
 
 // 128 bits = 16 bytes = a 16-char-table.
 // For now, if this value is changed, the code will not going to adapt.
@@ -4738,7 +4738,7 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
                 };
                 memcpy(pkt.dev_id, sync->rmt_dev_id, PHYSEC_DEV_ID_LEN);
                 PHYSEC_KeyGen *kg_s = (PHYSEC_KeyGen*) &(pkt.payload);
-                if (P_len >= PHYSEC_KEY_SIZE)
+                if ( 1 || P_len >= PHYSEC_KEY_SIZE)
                 {
                     
 

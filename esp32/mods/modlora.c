@@ -3628,7 +3628,7 @@ int PHYSEC_quantization(
             printf("(value)\n");
             printf("probe_frequency_ms\n"); //id
             printf("Probe frequency in ms\n"); //Name
-            printf("%f probe/s\n", PHYSEC_PROBE_FREQUENCY); //Vlaue
+            printf("%f probes/s\n", PHYSEC_PROBE_FREQUENCY); //Vlaue
 
             // Measurement delay
             printf("(value)\n");
@@ -4301,7 +4301,9 @@ static void PHYSEC_sampling(const uint16_t n_required,
         uint32_t wtime = 0;
         if ( wait_probe(sync, PHYSEC_MT_SNR, &m_val, &wtime, lora_obj.physec_timeout) == cur_cnt && wtime < lora_obj.physec_timeout)
         {
-        last_delay = (mp_hal_ticks_ms()-probe_start) - lora_obj.tx_time_on_air; // minus the toa of the Alice probe
+            // last_delay = (mp_hal_ticks_ms()-probe_start) - lora_obj.tx_time_on_air; // minus the toa of the Alice probe
+            last_delay = (mp_hal_ticks_ms()-probe_start) / 2 ;
+            
             delay_sum += last_delay;
 
             physec_log(3, "<<< PROBE ANSWER RECEIVED\n");
@@ -4314,12 +4316,12 @@ static void PHYSEC_sampling(const uint16_t n_required,
             //mp_hal_delay_ms(PHYSEC_COHERENCE_TIME);
         }
         //else if (cur_cnt > 0)
-        else
-            delay_sum -= last_delay;
+        // else
+        //     delay_sum -= last_delay;
 
     }
     m->nb_val = n_required;
-    m->delay = ((float) delay_sum / (float) (n_required)) / PHYSEC_PROBE_PERIOD;
+    m->delay = (float) delay_sum / ((float) (n_required) * PHYSEC_PROBE_PERIOD);
 
 }
 

@@ -3573,6 +3573,11 @@ int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, const uint8_t *key2_o
     return 128;
 }
 
+// For debug
+#if PHYSEC_DEBUG >= 4
+    char first_pack = 1;
+#endif
+
 /*
     Return value :
         number of generated bit (from left)
@@ -3606,8 +3611,6 @@ int PHYSEC_quantization(
     PHYSEC_golay_filter(&rssi_msermts);
 
     #if PHYSEC_DEBUG >= 4
-
-        static char first_pack = 1;
 
         if(first_pack){
 
@@ -4910,6 +4913,12 @@ PHYSEC_wait_key_agg(PHYSEC_Key *k, const PHYSEC_Sync *sync, PHYSEC_KeyGenStats *
 static PHYSEC_Key*
 PHYSEC_key_agg(PHYSEC_Sync *sync, bool initiator)
 {
+
+    // For debug
+    #if PHYSEC_DEBUG >= 4
+        first_pack = 1;
+    #endif
+
     PHYSEC_KeyGenStats *kgs = NULL;
     assert (sizeof(sync->rmt_dev_id) >= 4);
     physec_log2(1, "Starting Keygen with 0x%4x\n", *(uint32_t*) sync->rmt_dev_id);

@@ -3633,7 +3633,7 @@ int PHYSEC_quantization(
             // Measurement delay
             printf("(value)\n");
             printf("measurement_delay_ms\n"); //id
-            printf("Measurement delay in ms\n"); //Name
+            printf("1st measurement pack average delay in ms\n"); //Name
             printf("%f\n", rssi_msermts.delay * PHYSEC_PROBE_PERIOD); //Vlaue
         }
 

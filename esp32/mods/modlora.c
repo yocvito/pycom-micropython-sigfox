@@ -3628,13 +3628,13 @@ int PHYSEC_quantization(
             printf("(value)\n");
             printf("probe_frequency_ms\n"); //id
             printf("Probe frequency in ms\n"); //Name
-            printf("%f\n", PHYSEC_PROBE_FREQUENCY); //Vlaue
+            printf("%f probe/s\n", PHYSEC_PROBE_FREQUENCY); //Vlaue
 
             // Measurement delay
             printf("(value)\n");
             printf("measurement_delay_ms\n"); //id
             printf("1st measurement pack average delay in ms\n"); //Name
-            printf("%f\n", rssi_msermts.delay * PHYSEC_PROBE_PERIOD); //Vlaue
+            printf("%f ms\n", rssi_msermts.delay * PHYSEC_PROBE_PERIOD); //Vlaue
         }
 
     #endif

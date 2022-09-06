@@ -3316,7 +3316,7 @@ void  PHYSEC_interpolation(PHYSEC_Measures *rssi_msermts){
         for(int i = 1; i < rssi_msermts->nb_val; i++){
             delta_rssi = rssi_msermts->values[i] - rssi_msermts->values[i-1];
             rssi_err = (rssi_msermts->delay * (float)(delta_rssi));
-            interpolated_values[i] = rssi_msermts->values[i] - rssi_err;
+            interpolated_values[i] = rssi_msermts->values[i] - round(rssi_err);
         }
 
         rssi_msermts->delay = 0;

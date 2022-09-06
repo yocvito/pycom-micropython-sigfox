@@ -238,7 +238,7 @@ typedef enum {
 #define PHYSEC_KEY_SIZE_BYTES       (int16_t) (PHYSEC_KEY_SIZE / 8)
 
 // Channel Sampling
-#define PHYSEC_PROBE_FREQUENCY  20.0 // probe per second
+#define PHYSEC_PROBE_FREQUENCY  4.0 // probe per second
 #define PHYSEC_PROBE_PERIOD    1.0/PHYSEC_PROBE_FREQUENCY * 1000.0 // ms
 
 // Quantization
@@ -3576,6 +3576,7 @@ int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, const uint8_t *key2_o
 // For debug
 #if PHYSEC_DEBUG >= 4
     char first_pack = 1;
+    float delay_ratio; // Neded for interpolation plot
 #endif
 
 /*
@@ -3614,7 +3615,7 @@ int PHYSEC_quantization(
 
         if(first_pack){
 
-            first_pack = 0;
+            // first_pack = 0; // Done in the interpolation phase
 
             // Filtred rssi
             printf("(plot)\n");
@@ -3638,12 +3639,36 @@ int PHYSEC_quantization(
             printf("measurement_delay_ms\n"); //id
             printf("1st measurement pack average delay in ms\n"); //Name
             printf("%f ms\n", rssi_msermts.delay * PHYSEC_PROBE_PERIOD); //Vlaue
+
+            // Neded for interpolation plot
+            delay_ratio = rssi_msermts.delay;
         }
 
     #endif
 
     // same time measure estimation
     PHYSEC_interpolation(&rssi_msermts);
+
+    #if PHYSEC_DEBUG >= 4
+
+        if(first_pack){
+
+            first_pack = 0;
+
+            // Filtred rssi
+            printf("(plot)\n");
+            printf("time_shifted_measurment_pack_0\n"); //id
+            printf("Time Shifted RSSI Measurments : Pack 0\n"); //title
+            printf("Time unit\n"); // xlabel
+            printf("Shifted RSSI\n"); // ylabel
+            for(int i = 0; i < rssi_msermts.nb_val; i++){
+                printf("%f, %d\n", (float)i - delay_ratio, rssi_msermts.values[i]);
+            }
+            printf("(plot end)\n");
+
+        }
+
+    #endif
     
     if (kgs)
         kgs->signal_process =  ((float) mp_hal_ticks_ms()-(float)cur_start) / 1000.0;
@@ -4273,7 +4298,7 @@ static void PHYSEC_sampling(const uint16_t n_required,
 
         tick = mp_hal_ticks_ms();
         if( i>0 && ((tick - probe_start) < PHYSEC_PROBE_PERIOD)){
-            sleep(tick - probe_start);
+            usleep((tick - probe_start)*1000);
         }
 
         cur_cnt = cnt + i;

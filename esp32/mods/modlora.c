@@ -242,7 +242,7 @@ typedef enum {
 #define PHYSEC_PROBE_PERIOD    1.0/PHYSEC_PROBE_FREQUENCY * 1000.0 // ms
 
 // Quantization
-#define PHYSEC_DATA_TO_BAND_RATIO   0.7
+#define PHYSEC_DATA_TO_BAND_RATIO   0.1
 
 // PHYSEC_Packet defines
 #define PHYSEC_DEV_ID_LEN           4
@@ -3330,7 +3330,7 @@ void  PHYSEC_interpolation(PHYSEC_Measures *rssi_msermts){
 
 // -- Quantization
 
-#define PHYSEC_QUNTIFICATION_WINDOW_LEN 10
+#define PHYSEC_QUNTIFICATION_WINDOW_LEN 30
 
 static
 void PHYSEC_quantization_sort_rssi_window(int8_t *rssi_window, int8_t rssi_window_size){
@@ -3432,7 +3432,7 @@ void PHYSEC_quantization_free_density(struct density *d){
     CDF : cumulative distribution function
 */
 static
-int8_t PHYSEC_quantization_inverse_cdf(double cdf, const struct density *d){
+double PHYSEC_quantization_inverse_cdf(double cdf, const struct density *d){
 
     if(cdf < 0.0){
         cdf = 0.0;
@@ -3442,13 +3442,13 @@ int8_t PHYSEC_quantization_inverse_cdf(double cdf, const struct density *d){
         cdf = 1.0;
     }
 
-    int8_t q = d->q_0, q_rest;
+    double q = (double) d->q_0, q_rest;
     double integ = 0, current_integ;
 
     for(int i = 0; i < d->bin_nbr; i++){
         current_integ = d->bins[i]*d->values[i];
         if(cdf < integ+current_integ){
-            q_rest = (int8_t) ((cdf - integ)/d->values[i]);
+            q_rest = (cdf - integ)/d->values[i];
             return q + q_rest;
         }else{
             q += d->bins[i];
@@ -3485,8 +3485,8 @@ int8_t PHYSEC_quantization_compute_level_nbr(const struct density *d){
 static
 uint8_t PHYSEC_quantization_get_level(
     int8_t rssi,
-    const int8_t *threshold_starts,
-    const int8_t *threshold_ends,
+    const double *threshold_starts,
+    const double *threshold_ends,
     int8_t qunatification_level_nbr
 ){
     uint8_t level = 1;
@@ -3576,7 +3576,9 @@ int PHYSEC_key_concatenation(uint8_t *key1, int key1_size, const uint8_t *key2_o
 // For debug
 #if PHYSEC_DEBUG >= 4
     char first_pack = 1;
+    char first_quantization_window = 1;
     float delay_ratio; // Neded for interpolation plot
+    static void vec_key2vec(const PHYSEC_Key *k, int *vec_out);
 #endif
 
 /*
@@ -3696,8 +3698,8 @@ int PHYSEC_quantization(
         qunatification_level_nbr = PHYSEC_quantization_compute_level_nbr(&density);
 
         // computing thresholds
-        int8_t threshold_starts[qunatification_level_nbr];
-        int8_t threshold_ends[qunatification_level_nbr];
+        double threshold_starts[qunatification_level_nbr];
+        double threshold_ends[qunatification_level_nbr];
         double cdf = 0;
         for(int i = 0; i<qunatification_level_nbr; i++){
             threshold_starts[i] = PHYSEC_quantization_inverse_cdf(cdf, &density);
@@ -3728,6 +3730,59 @@ int PHYSEC_quantization(
                 }
             }
         }
+
+        // For report
+        #if PHYSEC_DEBUG >= 4
+
+            if(first_quantization_window){
+
+                first_quantization_window = 0;
+
+                // Filtred rssi
+                printf("(plot)\n");
+                printf("quantization_window\n"); //id
+                printf("Quantization Window\n"); //title
+                printf("Time unit\n"); // xlabel
+                printf("RSSI\n"); // ylabel
+                for(int i = 0; i < PHYSEC_QUNTIFICATION_WINDOW_LEN; i++){
+                    printf("%d, %d\n", i, rssi_window[i]);
+                }
+                printf("(plot end)\n");
+
+                // Quantization thresholds
+                printf("(plot)\n");
+                printf("quantization_thresholds\n"); //id
+                printf("Quantization Thresholds\n"); //title
+                printf("Time unit\n"); // xlabel
+                printf("RSSI\n"); // ylabel
+                for(int i = 0; i < qunatification_level_nbr; i++){
+                    printf("%d, %lf\n", i, threshold_starts[i]);
+                }
+                for(int i = 0; i < qunatification_level_nbr; i++){
+                    printf("%d, %lf\n", i, threshold_ends[i]);
+                }
+                printf("(plot end)\n");
+
+                // generated key from window
+                printf("qunatification_level_nbr = %d\n", qunatification_level_nbr);
+                printf("(value)\n");
+                
+                printf("generated_key_from_quantization_window\n"); //id
+                printf("Generated key from quantization window\n"); //Name
+                
+                // vlaue
+                {
+                    int key_vec[PHYSEC_KEY_SIZE];
+                    vec_key2vec(key_output, key_vec);
+                    for(int i = 0; i < nbr_of_generated_bits; i++){
+                        printf("%d", key_vec[i]);
+                    }
+                    printf("\n");
+                }
+
+            }
+
+        #endif
 
 
         nbr_of_processed_windows++;
@@ -4942,6 +4997,7 @@ PHYSEC_key_agg(PHYSEC_Sync *sync, bool initiator)
     // For debug
     #if PHYSEC_DEBUG >= 4
         first_pack = 1;
+        first_quantization_window = 1;
     #endif
 
     PHYSEC_KeyGenStats *kgs = NULL;

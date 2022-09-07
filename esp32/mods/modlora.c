@@ -5034,6 +5034,42 @@ PHYSEC_key_agg(PHYSEC_Sync *sync, bool initiator)
     physec_log2(1, "[+] Key entropy after Privacy amplification : %f\n", kgs->entropy_k);
     physec_log(1, "\n");
 
+    // data report
+    #if PHYSEC_DEBUG >= 4
+
+        printf("(value)\n");
+        printf("total_keygen_duration\n"); //id
+        printf("Total KeyGen duration\n"); //Name
+        printf("%f s\n", kgs->total);// vlaue
+    
+        printf("(value)\n");
+        printf("measure_duration\n"); //id
+        printf("Measure duration\n"); //Name
+        printf("%f s\n", kgs->measure);// vlaue
+
+        printf("(value)\n");
+        printf("signal_processing_duration\n"); //id
+        printf("Signal Processing duration\n"); //Name
+        printf("%f s\n", kgs->signal_process);// vlaue
+
+        printf("(value)\n");
+        printf("quantization_duration\n"); //id
+        printf("Quantization duration\n"); //Name
+        printf("%f s\n", kgs->quantization);// vlaue
+
+        printf("(value)\n");
+        printf("reconciliation_duration\n"); //id
+        printf("Reconciliation duration\n"); //Name
+        printf("%f s\n", kgs->reconciliation);// vlaue
+
+        printf("(value)\n");
+        printf("privacy_amplification_duration\n"); //id
+        printf("Privacy Amplification duration\n"); //Name
+        printf("%f s\n", kgs->privacy_amp);// vlaue
+
+
+    #endif
+
     return k;
 }
 

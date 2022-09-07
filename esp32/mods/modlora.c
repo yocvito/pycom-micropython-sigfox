@@ -3642,6 +3642,12 @@ int PHYSEC_quantization(
             printf("1st measurement pack average delay in ms\n"); //Name
             printf("%f ms\n", rssi_msermts.delay * PHYSEC_PROBE_PERIOD); //Vlaue
 
+            // Measurement delay
+            printf("(value)\n");
+            printf("data_to_band_ratio\n"); //id
+            printf("Data to band ratio\n"); //Name
+            printf("%f\n", PHYSEC_DATA_TO_BAND_RATIO); //Vlaue
+
             // Neded for interpolation plot
             delay_ratio = rssi_msermts.delay;
         }

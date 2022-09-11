@@ -242,7 +242,7 @@ typedef enum {
 #define PHYSEC_PROBE_PERIOD    1.0/PHYSEC_PROBE_FREQUENCY * 1000.0 // ms
 
 // Quantization
-#define PHYSEC_DATA_TO_BAND_RATIO   0.1
+#define PHYSEC_DATA_TO_BAND_RATIO   0.0
 
 // PHYSEC_Packet defines
 #define PHYSEC_DEV_ID_LEN           4

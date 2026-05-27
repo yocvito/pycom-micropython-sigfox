@@ -490,7 +490,7 @@ CFLAGS += -DMOD_LIBWIFI_ENABLED
 # libwifi uses constructs (designated initialisers in arrays, old-style empty
 # parens, signedness mixes) that trip pycom's -Werror=all baseline. Soften per
 # translation unit instead of weakening the global flags.
-$(BUILD)/lib/libwifi/%.o: CFLAGS += -Wno-error -Wno-strict-prototypes -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-sign-compare -Wno-pointer-sign -Wno-missing-field-initializers
+$(BUILD)/lib/libwifi/%.o: CFLAGS += -Wno-error -Wno-strict-prototypes -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-sign-compare -Wno-pointer-sign -Wno-implicit-fallthrough -Wno-missing-field-initializers
 endif
 OBJ += $(BUILD)/pins.o
 

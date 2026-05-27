@@ -1,0 +1,23 @@
+--- esp32/lib/libwifi/src/libwifi/core/misc/epoch.c
++++ esp32/lib/libwifi/src/libwifi/core/misc/epoch.c
+@@ -13,10 +13,16 @@
+  * limitations under the License.
+  */
+ 
+ #include "epoch.h"
+-#include <time.h>
++/*
++ * pycom port: this IDF's newlib does not expose clock_gettime() in the
++ * default feature set (see also esp32/pygate/lora_pkt_fwd/lora_pkt_fwd.c
++ * where the same call is commented out). gettimeofday() is available via
++ * lwIP and gives microsecond precision, which is fine for libwifi's needs.
++ */
++#include <sys/time.h>
+ 
+ unsigned long long libwifi_get_epoch(void) {
+-    struct timespec spec;
+-    clock_gettime(CLOCK_REALTIME, &spec);
+-    return spec.tv_sec * 1000 + spec.tv_nsec / 1000;
++    struct timeval tv;
++    gettimeofday(&tv, NULL);
++    return (unsigned long long)tv.tv_sec * 1000ULL + tv.tv_usec / 1000ULL;

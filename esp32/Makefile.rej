@@ -1,0 +1,18 @@
+--- esp32/Makefile
++++ esp32/Makefile
+@@ -52,6 +52,15 @@ PYBYTES_ENABLED ?= 0
+ # Flag to enable/disable Delta Update Feature. Disabled by default
+ DIFF_UPDATE_ENABLED ?= 0
+ 
++# libwifi: enable 802.11 frame parsing helpers exposed via WLAN.parse_frame /
++# WLAN.parse_packet. On by default for WIPY (the prime target for low-level
++# wifi work); other boards opt in. Set MOD_LIBWIFI_ENABLED=0 to disable.
++ifeq ($(BOARD), $(filter $(BOARD), WIPY))
++MOD_LIBWIFI_ENABLED ?= 1
++else
++MOD_LIBWIFI_ENABLED ?= 0
++endif
++
+ # by default make a BASE firmware with features as specified with defaults above
+ # valid choices for VARIANT are: BASE, PYBYTES, PYGATE
+ VARIANT ?=BASE

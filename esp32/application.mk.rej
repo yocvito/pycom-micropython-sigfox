@@ -1,0 +1,60 @@
+--- esp32/application.mk
++++ esp32/application.mk
+@@ -189,6 +196,9 @@ APP_MODS_SRC_C = $(addprefix mods/,\
+ 	machtouch.c \
+ 	modmdns.c \
+ 	)
++ifeq ($(MOD_LIBWIFI_ENABLED), 1)
++APP_MODS_SRC_C += mods/modlibwifi.c
++endif
+ ifeq ($(MOD_COAP_ENABLED), 1)
+ APP_INC += -Ibsdiff
+ APP_MODS_SRC_C += $(addprefix mods/,\
+@@ -330,6 +340,31 @@ APP_KSZ8851_SRC_C = $(addprefix drivers/ksz8851/,\
+ 	ksz8851.c \
+ 	)
+ 
++# libwifi: parse-only subset (gen/ omitted, see lib/libwifi/src/libwifi.h).
++APP_LIBWIFI_SRC_C = $(addprefix lib/libwifi/src/libwifi/,\
++	core/core.c \
++	core/frame/crc.c \
++	core/frame/frame.c \
++	core/frame/tag.c \
++	core/frame/tag_iterator.c \
++	core/misc/epoch.c \
++	core/radiotap/radiotap.c \
++	parse/data/data.c \
++	parse/data/eapol.c \
++	parse/management/assoc_request.c \
++	parse/management/assoc_response.c \
++	parse/management/beacon.c \
++	parse/management/common.c \
++	parse/management/deauthentication.c \
++	parse/management/disassociation.c \
++	parse/management/probe_request.c \
++	parse/management/probe_response.c \
++	parse/management/reassoc_request.c \
++	parse/management/reassoc_response.c \
++	parse/misc/radiotap.c \
++	parse/misc/security.c \
++	)
++
+ APP_SIGFOX_SRC_SIPY_C = $(addprefix sigfox/src/,\
+ 	manufacturer_api.c \
+ 	radio.c \
+@@ -455,6 +490,15 @@ OBJ += $(addprefix $(BUILD)/, $(APP_KSZ8851_SRC_C:.c=.o) $(APP_ETHERNET_SRC_C:.c
+ CFLAGS += -DPYETH_ENABLED
+ SRC_QSTR += $(APP_KSZ8851_SRC_C) $(APP_ETHERNET_SRC_C)
+ endif
++ifeq ($(MOD_LIBWIFI_ENABLED), 1)
++$(info libwifi Enabled)
++OBJ += $(addprefix $(BUILD)/, $(APP_LIBWIFI_SRC_C:.c=.o))
++CFLAGS += -DMOD_LIBWIFI_ENABLED
++# libwifi uses constructs (designated initialisers in arrays, old-style empty
++# parens, signedness mixes) that trip pycom's -Werror=all baseline. Soften per
++# translation unit instead of weakening the global flags.
++$(BUILD)/lib/libwifi/%.o: CFLAGS += -Wno-error -Wno-strict-prototypes -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-sign-compare -Wno-pointer-sign -Wno-implicit-fallthrough -Wno-missing-field-initializers
++endif
+ OBJ += $(BUILD)/pins.o
+ 
+ BOOT_OBJ = $(addprefix $(BUILD)/, $(BOOT_SRC_C:.c=.o))

@@ -1,0 +1,39 @@
+--- esp32/mods/modwlan.c
++++ esp32/mods/modwlan.c
+@@ -2751,6 +2780,9 @@ STATIC const mp_map_elem_t wlan_locals_dict_table[] = {
+     { MP_OBJ_NEW_QSTR(MP_QSTR_events),              (mp_obj_t)&wlan_events_obj },
+     { MP_OBJ_NEW_QSTR(MP_QSTR_wifi_packet),         (mp_obj_t)&wlan_packet_obj },
+     { MP_OBJ_NEW_QSTR(MP_QSTR_ctrl_pkt_filter),     (mp_obj_t)&wlan_ctrl_pkt_filter_obj },
++#ifdef MOD_LIBWIFI_ENABLED
++    { MP_OBJ_NEW_QSTR(MP_QSTR_parse_frame),         (mp_obj_t)&wlan_parse_frame_obj },
++#endif
+     { MP_OBJ_NEW_QSTR(MP_QSTR_smartConfig),         (mp_obj_t)&wlan_smartConfig_obj },
+     { MP_OBJ_NEW_QSTR(MP_QSTR_Connected_ap_pwd),    (mp_obj_t)&wlan_smartConfkey_obj },
+ 
+@@ -2796,6 +2828,26 @@ STATIC const mp_map_elem_t wlan_locals_dict_table[] = {
+     { MP_OBJ_NEW_QSTR(MP_QSTR_FILTER_CTRL_PKT_CFENDACK),     MP_OBJ_NEW_SMALL_INT(WIFI_PROMIS_CTRL_FILTER_MASK_CFENDACK) },
+     { MP_OBJ_NEW_QSTR(MP_QSTR_SMART_CONF_DONE),             MP_OBJ_NEW_SMALL_INT(MOD_WLAN_SMART_CONFIG_DONE) },
+     { MP_OBJ_NEW_QSTR(MP_QSTR_SMART_CONF_TIMEOUT),             MP_OBJ_NEW_SMALL_INT(MOD_WLAN_SMART_CONFIG_TIMEOUT) },
++#ifdef MOD_LIBWIFI_ENABLED
++    // libwifi 802.11 frame type / subtype constants. Mirror the libwifi enum
++    // values so users don't need to import libwifi headers from Python.
++    { MP_OBJ_NEW_QSTR(MP_QSTR_FRAME_MGMT),                  MP_OBJ_NEW_SMALL_INT(0) }, // TYPE_MANAGEMENT
++    { MP_OBJ_NEW_QSTR(MP_QSTR_FRAME_CTRL),                  MP_OBJ_NEW_SMALL_INT(1) }, // TYPE_CONTROL
++    { MP_OBJ_NEW_QSTR(MP_QSTR_FRAME_DATA),                  MP_OBJ_NEW_SMALL_INT(2) }, // TYPE_DATA
++    { MP_OBJ_NEW_QSTR(MP_QSTR_FRAME_EXT),                   MP_OBJ_NEW_SMALL_INT(3) }, // TYPE_EXTENSION
++    // Management subtypes
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_ASSOC_REQ),           MP_OBJ_NEW_SMALL_INT(0) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_ASSOC_RESP),          MP_OBJ_NEW_SMALL_INT(1) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_REASSOC_REQ),         MP_OBJ_NEW_SMALL_INT(2) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_REASSOC_RESP),        MP_OBJ_NEW_SMALL_INT(3) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_PROBE_REQ),           MP_OBJ_NEW_SMALL_INT(4) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_PROBE_RESP),          MP_OBJ_NEW_SMALL_INT(5) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_BEACON),              MP_OBJ_NEW_SMALL_INT(8) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_DISASSOC),            MP_OBJ_NEW_SMALL_INT(10) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_AUTH),                MP_OBJ_NEW_SMALL_INT(11) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_DEAUTH),              MP_OBJ_NEW_SMALL_INT(12) },
++    { MP_OBJ_NEW_QSTR(MP_QSTR_SUBTYPE_ACTION),              MP_OBJ_NEW_SMALL_INT(13) },
++#endif
+ };
+ STATIC MP_DEFINE_CONST_DICT(wlan_locals_dict, wlan_locals_dict_table);
+ 
